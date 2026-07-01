@@ -1,5 +1,5 @@
 use color_eyre::{Result, eyre::WrapErr};
-use ratatui::crossterm::event::{self, Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;

@@ -1,4 +1,3 @@
-use color_eyre::Result;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
