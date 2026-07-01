@@ -1,25 +1,43 @@
 use color_eyre::{Result, eyre::WrapErr};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
+use std::time::Duration;
+use tokio::time::sleep;
+use tokio_stream::StreamExt;
 
 use crate::tui::app::*;
 
 impl App {
-    pub async fn handle_events(&mut self) -> Result<()> {
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match self.input_mode {
-                InputMode::Normal => self
-                    .handle_normal_mode(key)
-                    .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
-                InputMode::Editing => self
-                    .handle_editing_mode(key)
-                    .await
-                    .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
-            },
-            _ => Ok(()),
+    pub async fn handle_events(&mut self, event_stream: &mut EventStream) -> Result<()> {
+        tokio::select! {
+            Some(Ok(event)) = event_stream.next() => {
+                match event {
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Press {
+                            match self.input_mode {
+                                InputMode::Normal => self
+                                    .handle_normal_mode(key)
+                                    .await
+                                    .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
+
+                                InputMode::Editing => self
+                                    .handle_editing_mode(key)
+                                    .await
+                                    .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
+                            }
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    _ => Ok(())
+                }
+            }
+            _ = sleep(Duration::from_millis(250)) => {
+                Ok(())
+            }
         }
     }
 
-    pub fn handle_normal_mode(&mut self, key: KeyEvent) -> Result<()> {
+    pub async fn handle_normal_mode(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('e') => {
                 self.input_mode = InputMode::Editing;

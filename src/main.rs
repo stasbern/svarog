@@ -3,7 +3,6 @@ use rig::completion::Prompt;
 use rig::providers::ollama;
 
 use color_eyre::Result;
-use tokio::sync::mpsc;
 
 pub mod events;
 use crate::events::*;
@@ -22,7 +21,7 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let ollama_agent = ollama_client
             .agent("qwen3:30b-a3b-instruct-2507-q4_K_M")
-            .preamble("You are a helpful assistant.")
+            .preamble("I am building up a Rust stack wrapper around you. I am using rig.rs + ratatui.rs + ollama")
             .temperature(0.5)
             .build();
         while let Some(Request::Prompt(prompt)) = channels.prompt_rx.recv().await {

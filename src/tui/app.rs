@@ -1,5 +1,5 @@
 use color_eyre::{Result, eyre::WrapErr};
-use ratatui::DefaultTerminal;
+use ratatui::{DefaultTerminal, crossterm::event::EventStream};
 use tokio::sync::mpsc;
 
 use crate::events::*;
@@ -115,7 +115,8 @@ impl App {
             terminal.draw(|frame| {
                 self.render(frame);
             })?;
-            self.handle_events()
+            let mut event_stream = EventStream::new();
+            self.handle_events(&mut event_stream)
                 .await
                 .wrap_err("handle events failed")?;
             while let Ok(Response::CompleteResponse(msg)) = self.rx.try_recv() {
