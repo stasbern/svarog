@@ -19,9 +19,6 @@ pub struct App {
     pub scroll_offset: u16,
     pub char_index: usize,
 
-    pub input_lines_count: usize,
-    pub terminal_width: u16,
-
     exit: bool,
     tx: mpsc::Sender<Request>,
     rx: mpsc::Receiver<Response>,
@@ -32,8 +29,6 @@ impl App {
         Self {
             input: String::new(),
             char_index: 0,
-            input_lines_count: 1,
-            terminal_width: 3,
             input_mode: InputMode::Normal,
             messages: Vec::new(),
             scroll_offset: 0,
@@ -44,13 +39,7 @@ impl App {
     }
 
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        if new_cursor_pos > (self.terminal_width - 2) as usize {
-            self.input_lines_count.checked_add(1);
-        }
-        new_cursor_pos.clamp(
-            0,
-            self.input.chars().count() % (self.terminal_width - 2) as usize,
-        )
+        new_cursor_pos.clamp(0, self.input.chars().count())
     }
 
     pub fn reset_cursor(&mut self) {
@@ -125,7 +114,6 @@ impl App {
         while !self.exit {
             terminal.draw(|frame| {
                 self.render(frame);
-                self.terminal_width = frame.area().width as u16;
             })?;
             self.handle_events()
                 .await

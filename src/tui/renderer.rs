@@ -12,9 +12,20 @@ impl App {
     pub fn render(&self, frame: &mut Frame) {
         let title = Line::from(" svarog ".bold());
 
+        let inner_width = frame.area().width.saturating_sub(2) as usize;
+        let input_lines = if inner_width > 0 {
+            let char_count = self.input.chars().count();
+            if char_count == 0 {
+                1
+            } else {
+                (char_count / inner_width) + 1
+            }
+        } else {
+            1
+        };
         let layout = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Min((self.input_lines_count + 2) as u16),
+            Constraint::Length(input_lines as u16 + 2),
             Constraint::Min(1),
         ]);
         let [instructions_area, input_area, messages_area] = frame.area().layout(&layout);
@@ -54,13 +65,22 @@ impl App {
             // Make the cursor visible and ask ratatui to put it at the specified coordinates after
             // rendering
             #[expect(clippy::cast_possible_truncation)]
-            InputMode::Editing => frame.set_cursor_position(Position::new(
-                // Draw the cursor at the current position in the input field.
-                // This position can be controlled via the left and right arrow key
-                input_area.x + (self.char_index as u16 % (self.terminal_width - 2)) + 1,
-                // Move one line down, from the border to the input line
-                input_area.y + self.input_lines_count as u16,
-            )),
+            InputMode::Editing => {
+                let cursor_line = if inner_width > 0 {
+                    self.char_index / inner_width
+                } else {
+                    0
+                };
+                let cursor_col = if inner_width > 0 {
+                    self.char_index % inner_width
+                } else {
+                    0
+                };
+                frame.set_cursor_position(Position::new(
+                    input_area.x + cursor_col as u16 + 1,
+                    input_area.y + cursor_line as u16 + 1,
+                ));
+            }
         }
 
         let combined_messages: String = self
