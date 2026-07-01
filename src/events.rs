@@ -1,0 +1,34 @@
+use color_eyre::Result;
+use tokio::sync::mpsc;
+
+#[derive(Debug, Clone)]
+pub enum Request {
+    Prompt(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum Response {
+    Token(String),
+    CompleteResponse(String),
+    Error(String),
+}
+
+pub struct Channels {
+    pub prompt_tx: mpsc::Sender<Request>,
+    pub prompt_rx: mpsc::Receiver<Request>,
+    pub response_tx: mpsc::Sender<Response>,
+    pub response_rx: mpsc::Receiver<Response>,
+}
+
+impl Channels {
+    pub fn new() -> Self {
+        let (prompt_tx, prompt_rx) = mpsc::channel::<Request>(100);
+        let (response_tx, response_rx) = mpsc::channel::<Response>(100);
+        Self {
+            prompt_tx,
+            prompt_rx,
+            response_tx,
+            response_rx,
+        }
+    }
+}

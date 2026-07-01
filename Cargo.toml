@@ -1,0 +1,11 @@
+[package]
+name = "svarog"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
+ratatui = "0.30.2"
+rig = "0.39.0"
+tokio = { version = "1.52.3", features = ["full"] }
