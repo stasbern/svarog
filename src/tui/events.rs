@@ -44,7 +44,9 @@ impl App {
                 self.input_mode = InputMode::Editing;
             }
             KeyCode::Char('i') => {
-                OllamaClient::new("nomic-embed-text", "", 0.1).ingest_embeddings();
+                OllamaClient::new("nomic-embed-text", "", 0.1)
+                    .ingest_embeddings()
+                    .await?;
             }
             KeyCode::Char('q') => self.exit(),
             _ => {}

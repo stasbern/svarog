@@ -2,17 +2,16 @@ use color_eyre::Result;
 
 use rig::client::{CompletionClient, EmbeddingsClient, ProviderClient};
 use rig::completion::Prompt;
-use rig::providers::gemini::completion::gemini_api_types::Modality::Document;
 use rig::providers::ollama::Client;
-use rig::{Embed, vector_store};
 
-use rig::embeddings::{EmbeddingModel, EmbeddingsBuilder};
-use rig::vector_store::in_memory_store::InMemoryVectorStore;
+use rig::surrealdb::SurrealVectorStore;
+use rig::{Embed, embeddings::EmbeddingsBuilder, vector_store::InsertDocuments};
+use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, RocksDb};
+
 use serde::Serialize;
-
-use std::path::{Path, PathBuf};
-use std::{io, vec};
-use tokio::fs::{self, DirEntry};
+use std::path::PathBuf;
+use tokio::fs;
 use tokio::sync::mpsc;
 
 use crate::events::*;
@@ -89,12 +88,13 @@ impl OllamaClient {
     }
 
     pub async fn ingest_embeddings(self) -> Result<()> {
+        let inputs_dir = PathBuf::from("/inputs");
+
         tokio::spawn(async move {
             let mut chunks: Vec<Chunk> = vec![];
 
-            let inputs_dir = Path::new("/inputs");
-            if let Ok(mut entries) = fs::read_dir(inputs_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(mut entries) = fs::read_dir(&inputs_dir).await {
+                while let Some(entry) = entries.next_entry().await? {
                     if let Ok(text) = fs::read_to_string(entry.path()).await {
                         let raw_chunks = Self::chunk_input(&text, 1000).await;
 
@@ -110,12 +110,17 @@ impl OllamaClient {
 
             let embedding_model = self.client.embedding_model(&self.model);
 
-            let embeddings = EmbeddingsBuilder::new(embedding_model)
+            let embeddings = EmbeddingsBuilder::new(embedding_model.clone())
                 .documents(chunks)?
                 .build()
                 .await?;
 
-            let vector_store = InMemoryVectorStore::from_documents(embeddings);
+            let db = Surreal::new::<RocksDb>("test.db").await?;
+            db.use_ns("svarog_ns").use_db("svarog_db").await?;
+
+            let vector_store = SurrealVectorStore::with_defaults(embedding_model, db);
+            vector_store.insert_documents(embeddings).await?;
+
             Ok::<(), color_eyre::eyre::Error>(())
         });
 
