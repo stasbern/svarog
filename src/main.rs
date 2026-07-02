@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         "I am building up a Rust stack wrapper around you. I am using rig.rs + ratatui.rs + ollama",
         0.5,
     );
-    client.handle_prompts(channels.prompt_rx, channels.response_tx);
+    client.handle_completion(channels.prompt_rx, channels.response_tx);
 
     // initialize tui with channels
     let mut terminal = ratatui::init();

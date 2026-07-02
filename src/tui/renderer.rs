@@ -35,6 +35,8 @@ impl App {
                 Line::from(vec![
                     " Editing ".into(),
                     "<E>".blue().bold(),
+                    " Ingest Embeddings ".into(),
+                    "<I>".blue().bold(),
                     " Quit ".into(),
                     "<Q> ".blue().bold(),
                 ]),

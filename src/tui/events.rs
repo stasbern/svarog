@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
+use crate::rig::client::*;
 use crate::tui::app::*;
 
 impl App {
@@ -41,6 +42,9 @@ impl App {
         match key.code {
             KeyCode::Char('e') => {
                 self.input_mode = InputMode::Editing;
+            }
+            KeyCode::Char('i') => {
+                OllamaClient::new("nomic-embed-text", "", 0.1).ingest_embeddings();
             }
             KeyCode::Char('q') => self.exit(),
             _ => {}
