@@ -1,3 +1,4 @@
 /target
 .env
 Cargo.lock
+svarog_vectors.db

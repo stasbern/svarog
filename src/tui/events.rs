@@ -1,10 +1,11 @@
 use color_eyre::{Result, eyre::WrapErr};
 use ratatui::crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
-use crate::rig::client::*;
+use std::path::PathBuf;
+
 use crate::tui::app::*;
 
 impl App {
@@ -44,9 +45,19 @@ impl App {
                 self.input_mode = InputMode::Editing;
             }
             KeyCode::Char('i') => {
-                OllamaClient::new("nomic-embed-text", "", 0.1)
-                    .ingest_embeddings()
-                    .await?;
+                let kb = self.knowledge.clone();
+                let status = self.status_tx.clone();
+                tokio::spawn(async move {
+                    let _ = status.send("Ingesting documents".into()).await;
+                    match kb.ingest_directory(&PathBuf::from("./input")).await {
+                        Ok(()) => {
+                            let _ = status.send("Ingestion complete".into()).await;
+                        }
+                        Err(e) => {
+                            let _ = status.send(format!("Ingestion failed: {e}")).await;
+                        }
+                    }
+                });
             }
             KeyCode::Char('q') => self.exit(),
             _ => {}

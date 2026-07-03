@@ -1,8 +1,10 @@
 use color_eyre::{Result, eyre::WrapErr};
 use ratatui::{DefaultTerminal, crossterm::event::EventStream};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::events::*;
+use crate::rig::knowledge::KnowledgeBase;
 
 #[derive(Debug, Default)]
 pub enum InputMode {
@@ -11,7 +13,6 @@ pub enum InputMode {
     Editing,
 }
 
-#[derive(Debug)]
 pub struct App {
     pub input_mode: InputMode,
     pub input: String,
@@ -22,10 +23,18 @@ pub struct App {
     exit: bool,
     tx: mpsc::Sender<Request>,
     rx: mpsc::Receiver<Response>,
+    pub(crate) knowledge: Arc<KnowledgeBase>,
+    pub(crate) status_tx: mpsc::Sender<String>,
+    status_rx: mpsc::Receiver<String>,
 }
 
 impl App {
-    pub fn new(tx: mpsc::Sender<Request>, rx: mpsc::Receiver<Response>) -> Self {
+    pub fn new(
+        tx: mpsc::Sender<Request>,
+        rx: mpsc::Receiver<Response>,
+        knowledge: Arc<KnowledgeBase>,
+    ) -> Self {
+        let (status_tx, status_rx) = mpsc::channel::<String>(32);
         Self {
             input: String::new(),
             char_index: 0,
@@ -35,6 +44,9 @@ impl App {
             exit: false,
             tx,
             rx,
+            knowledge,
+            status_tx,
+            status_rx,
         }
     }
 
@@ -121,6 +133,9 @@ impl App {
                 .wrap_err("handle events failed")?;
             while let Ok(Response::CompleteResponse(msg)) = self.rx.try_recv() {
                 self.messages.push(msg);
+            }
+            while let Ok(status) = self.status_rx.try_recv() {
+                self.messages.push("[system]: ".to_string() + &status);
             }
         }
         Ok(())

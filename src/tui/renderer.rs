@@ -24,11 +24,11 @@ impl App {
             1
         };
         let layout = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(input_lines as u16 + 2),
             Constraint::Min(1),
+            Constraint::Length(input_lines as u16 + 2),
+            Constraint::Length(1),
         ]);
-        let [instructions_area, input_area, messages_area] = frame.area().layout(&layout);
+        let [messages_area, input_area, instructions_area] = frame.area().layout(&layout);
 
         let (instructiuons, style) = match self.input_mode {
             InputMode::Normal => (
