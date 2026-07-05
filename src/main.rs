@@ -2,7 +2,6 @@ use color_eyre::Result;
 use std::sync::Arc;
 
 pub mod events;
-// use crate::events::*;
 pub mod tui;
 use crate::tui::app::*;
 pub mod rig;

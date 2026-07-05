@@ -13,10 +13,21 @@ pub enum InputMode {
     Editing,
 }
 
+pub struct ChatEntry {
+    pub sender: String,
+    pub message: String,
+}
+
+impl ChatEntry {
+    pub fn new(sender: String, message: String) -> Self {
+        Self { sender, message }
+    }
+}
+
 pub struct App {
     pub input_mode: InputMode,
     pub input: String,
-    pub messages: Vec<String>,
+    pub messages: Vec<ChatEntry>,
     pub scroll_offset: u16,
     pub char_index: usize,
 
@@ -115,7 +126,8 @@ impl App {
     }
 
     pub async fn submit_message(&mut self) -> Result<()> {
-        self.messages.push(self.input.clone());
+        self.messages
+            .push(ChatEntry::new("user".to_string(), self.input.clone()));
         self.tx.send(Request::Prompt(self.input.clone())).await?;
         self.input.clear();
         self.reset_cursor();
@@ -131,11 +143,25 @@ impl App {
             self.handle_events(&mut event_stream)
                 .await
                 .wrap_err("handle events failed")?;
-            while let Ok(Response::CompleteResponse(msg)) = self.rx.try_recv() {
-                self.messages.push(msg);
+            while let Ok(resp) = self.rx.try_recv() {
+                match resp {
+                    Response::CompleteResponse(msg) => self
+                        .messages
+                        .push(ChatEntry::new("svarog".to_string(), msg)),
+                    Response::ContextFound(contexts) => {
+                        for (score, preview) in &contexts {
+                            self.messages.push(ChatEntry::new(
+                                format!("kb: score {}", score),
+                                preview.clone(),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
             }
             while let Ok(status) = self.status_rx.try_recv() {
-                self.messages.push("[system]: ".to_string() + &status);
+                self.messages
+                    .push(ChatEntry::new("system".to_string(), status));
             }
         }
         Ok(())

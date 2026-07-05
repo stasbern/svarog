@@ -88,8 +88,7 @@ impl App {
         let combined_messages: String = self
             .messages
             .iter()
-            .enumerate()
-            .map(|(i, m)| format!("{i}: {m}\n"))
+            .map(|m| format!("[{}]:\n{:<5}\n\n", m.sender, m.message))
             .collect();
 
         let messages_widget = Paragraph::new(combined_messages)

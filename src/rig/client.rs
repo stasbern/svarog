@@ -51,6 +51,20 @@ impl OllamaClient {
             let mut chat_history: Vec<Message> = vec![];
 
             while let Some(Request::Prompt(prompt)) = prompt_rx.recv().await {
+                match knowledge.search(&prompt, 4).await {
+                    Ok(results) if !results.is_empty() => {
+                        let context_info: Vec<(f64, String)> = results
+                            .iter()
+                            .map(|r| {
+                                let preview = r.content.chars().take(120).collect::<String>();
+                                (r.score, preview)
+                            })
+                            .collect();
+                        let _ = response_tx.send(Response::ContextFound(context_info)).await;
+                    }
+                    _ => {}
+                }
+
                 match agent.chat(&prompt, &mut chat_history).await {
                     Ok(response_text) => {
                         response_tx

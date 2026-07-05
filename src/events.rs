@@ -9,6 +9,7 @@ pub enum Request {
 pub enum Response {
     Token(String),
     CompleteResponse(String),
+    ContextFound(Vec<(f64, String)>),
     Error(String),
 }
 

@@ -1,4 +1,5 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -6,18 +7,25 @@ use color_eyre::Result;
 use rig::client::EmbeddingsClient;
 use rig::providers::ollama;
 use rig::surrealdb::SurrealVectorStore;
-use rig::{Embed, embeddings::EmbeddingsBuilder, vector_store::InsertDocuments};
+use rig::vector_store::{InsertDocuments, VectorSearchRequest, VectorStoreIndexDyn};
+use rig::{Embed, embeddings::EmbeddingsBuilder};
 
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
 use crate::rig::client;
 
-#[derive(Embed, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Embed, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 struct Chunk {
     id: PathBuf,
     #[embed]
     content: String,
+}
+
+pub struct SearchResult {
+    pub score: f64,
+    pub id: String,
+    pub content: String,
 }
 
 pub struct KnowledgeBase {
@@ -87,5 +95,30 @@ impl KnowledgeBase {
             })
             .filter(|s| !s.trim().is_empty())
             .collect()
+    }
+
+    pub async fn search(&self, query: &str, top_k: u64) -> Result<Vec<SearchResult>> {
+        let store = self.vector_store();
+        let req = VectorSearchRequest::builder()
+            .query(query)
+            .samples(top_k)
+            .build();
+
+        let results = store
+            .top_n(req)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+
+        Ok(results
+            .into_iter()
+            .map(|(score, id, doc)| {
+                let content = doc
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                SearchResult { score, id, content }
+            })
+            .collect())
     }
 }
