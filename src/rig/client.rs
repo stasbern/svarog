@@ -62,7 +62,22 @@ impl OllamaClient {
                             .collect();
                         let _ = response_tx.send(Response::ContextFound(context_info)).await;
                     }
-                    _ => {}
+                    Ok(_) => {
+                        let _ = response_tx
+                            .send(Response::ContextFound(vec![(
+                                0.0,
+                                "no relevant context in KB".into(),
+                            )]))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = response_tx
+                            .send(Response::ContextFound(vec![(
+                                0.0,
+                                format!("KB search error {e}"),
+                            )]))
+                            .await;
+                    }
                 }
 
                 match agent.chat(&prompt, &mut chat_history).await {

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections;
+use std::fmt::format;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -52,7 +53,7 @@ impl KnowledgeBase {
         if let Ok(mut entries) = fs::read_dir(&dir).await {
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(text) = fs::read_to_string(entry.path()).await {
-                    for chunk_text in Self::chunk_input(&text, 1000) {
+                    for chunk_text in Self::chunk_input(&text, 400) {
                         chunks.push(Chunk {
                             id: entry.path(),
                             content: chunk_text,
@@ -66,10 +67,11 @@ impl KnowledgeBase {
             return Ok(());
         }
 
-        let embeddings = EmbeddingsBuilder::new(self.embedding_model.clone())
-            .document(chunks)?
-            .build()
-            .await?;
+        let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+        for chunk in chunks {
+            builder = builder.document(chunk)?;
+        }
+        let embeddings = builder.build().await?;
 
         self.vector_store().insert_documents(embeddings).await?;
         Ok(())
@@ -80,21 +82,62 @@ impl KnowledgeBase {
     }
 
     fn chunk_input(text: &str, max_chars: usize) -> Vec<String> {
-        text.split("\n\n")
-            .flat_map(|paragraph| {
-                if paragraph.len() <= max_chars {
-                    vec![paragraph.to_string()]
-                } else {
-                    paragraph
-                        .chars()
-                        .collect::<Vec<_>>()
-                        .chunks(max_chars)
-                        .map(|c| c.iter().collect::<String>())
-                        .collect()
+        const SEPARATORS: &[&str] = &["\n\n\n", "\n\n", "\n", ". ", ", ", " "];
+
+        fn split_recursive(text: &str, max_chars: usize, sep_idx: usize) -> Vec<String> {
+            if text.len() <= max_chars || sep_idx >= SEPARATORS.len() {
+                if text.len() <= max_chars {
+                    return if text.trim().is_empty() {
+                        vec![]
+                    } else {
+                        vec![text.to_string()]
+                    };
                 }
-            })
-            .filter(|s| !s.trim().is_empty())
-            .collect()
+                return text
+                    .chars()
+                    .collect::<Vec<_>>()
+                    .chunks(max_chars)
+                    .map(|c| c.iter().collect::<String>())
+                    .filter(|s| !s.trim().is_empty())
+                    .collect();
+            }
+
+            let sep = SEPARATORS[sep_idx];
+            let parts: Vec<&str> = text.split(sep).collect();
+
+            if parts.len() == 1 {
+                return split_recursive(text, max_chars, sep_idx + 1);
+            }
+
+            let mut chunks = Vec::new();
+            let mut current = String::new();
+
+            for part in parts {
+                let candidate = if current.is_empty() {
+                    part.to_string()
+                } else {
+                    format!("{}{}{}", current, sep, part)
+                };
+                if candidate.len() <= max_chars {
+                    current = candidate;
+                } else {
+                    if !current.trim().is_empty() {
+                        chunks.push(current);
+                    }
+                    if part.len() > max_chars {
+                        chunks.extend(split_recursive(part, max_chars, sep_idx + 1));
+                        current = String::new();
+                    } else {
+                        current = part.to_string();
+                    }
+                }
+            }
+            if !current.trim().is_empty() {
+                chunks.push(current);
+            }
+            chunks
+        }
+        split_recursive(text, max_chars, 0)
     }
 
     pub async fn search(&self, query: &str, top_k: u64) -> Result<Vec<SearchResult>> {
@@ -112,11 +155,19 @@ impl KnowledgeBase {
         Ok(results
             .into_iter()
             .map(|(score, id, doc)| {
-                let content = doc
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let content = if let Some(arr) = doc.as_array() {
+                    arr.iter()
+                        .filter_map(|item| item.get("content").and_then(|v| v.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    doc.get("content")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| doc.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+
                 SearchResult { score, id, content }
             })
             .collect())
