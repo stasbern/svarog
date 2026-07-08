@@ -30,6 +30,11 @@ pub struct App {
     pub messages: Vec<ChatEntry>,
     pub scroll_offset: u16,
     pub char_index: usize,
+    pub ingesting: bool,
+    pub follow_output: bool,
+    pub status_line: String,
+    pub last_viewport: (u16, u16),
+    
 
     exit: bool,
     tx: mpsc::Sender<Request>,
@@ -52,6 +57,10 @@ impl App {
             input_mode: InputMode::Normal,
             messages: Vec::new(),
             scroll_offset: 0,
+            ingesting: false,
+            follow_output: true,
+            status_line: String::new(),
+            last_viewport: (0, 0),
             exit: false,
             tx,
             rx,
@@ -83,6 +92,30 @@ impl App {
 
     pub fn move_cursor_to_end(&mut self) {
         self.char_index = self.clamp_cursor(self.input.chars().count());
+    }
+
+    pub fn scroll_up(&mut self, lines: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.follow_output = false;
+    }
+
+    pub fn scroll_down(&mut self, lines: u16, viewport_height: u16, total_height: u16) {
+        let max_scroll = total_height.saturating_sub(viewport_height);
+        self.scroll_offset = self.scroll_offset.saturating_add(lines).min(max_scroll);
+        if self.scroll_offset >= max_scroll {
+            self.follow_output = true;
+        }
+    }
+
+    pub fn wrapped_line_count(text: &str, width: usize) -> u16 {
+        if width == 0 { return 1; }
+        text.split('\n')
+            .map(|line| {
+                let len = line.chars().count();
+                if len == 0 { 1 } else { ((len + width - 1) / width) as u16 }
+            })
+            .sum::<u16>()
+            .max(1)
     }
 
     pub fn enter_char(&mut self, new_char: char) {
@@ -134,6 +167,14 @@ impl App {
         Ok(())
     }
 
+    pub fn total_content_height(messages: &[ChatEntry], viewport_width: u16) -> u16 {
+        let msg_inner_width = viewport_width.saturating_sub(2) as usize;
+        messages
+            .iter()
+            .map(|m| App::wrapped_line_count(&m.message, msg_inner_width) + 2)
+            .sum()
+    }
+
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.exit {
             terminal.draw(|frame| {
@@ -160,8 +201,10 @@ impl App {
                 }
             }
             while let Ok(status) = self.status_rx.try_recv() {
-                self.messages
-                    .push(ChatEntry::new("system".to_string(), status));
+                if status.contains("complete") || status.contains("failed") {
+                    self.ingesting = false;
+                }
+                self.status_line = status;
             }
         }
         Ok(())

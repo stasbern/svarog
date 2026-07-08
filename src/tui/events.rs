@@ -44,11 +44,12 @@ impl App {
             KeyCode::Char('e') => {
                 self.input_mode = InputMode::Editing;
             }
-            KeyCode::Char('i') => {
+            KeyCode::Char('i') if !self.ingesting => {
+                self.ingesting = true;
+                self.status_line = "Ingesting documents...".into();
                 let kb = self.knowledge.clone();
                 let status = self.status_tx.clone();
                 tokio::spawn(async move {
-                    let _ = status.send("Ingesting documents".into()).await;
                     match kb.ingest_directory(&PathBuf::from("./input")).await {
                         Ok(()) => {
                             let _ = status.send("Ingestion complete".into()).await;
@@ -59,6 +60,13 @@ impl App {
                     }
                 });
             }
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(3),
+            KeyCode::Down | KeyCode::Char('j') => {
+                // Need total height for clamping — estimate with a reasonable width
+                let viewport_h = self.last_viewport.1;
+                let total_h = Self::total_content_height(&self.messages, self.last_viewport.0);
+                self.scroll_down(3, viewport_h, total_h);
+            }
             KeyCode::Char('q') => self.exit(),
             _ => {}
         }
@@ -67,7 +75,8 @@ impl App {
 
     pub async fn handle_editing_mode(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Enter => self.submit_message().await?,
+            KeyCode::Enter if !self.ingesting => self.submit_message().await?,
+            KeyCode::Enter => {} // swallow Enter while ingesting
             KeyCode::Backspace => self.delete_char(),
             KeyCode::Char(to_insert) => self.enter_char(to_insert),
             KeyCode::Left => self.move_cursor_left(),
