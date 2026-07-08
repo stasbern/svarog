@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().expect(".env file was not read successfully");
 
     // initialize tokio mpsc channels
-    let channels = events::Channels::new();
+    let channels = events::Channels::new()?;
 
     // initialize ollama client and agent
     let client = OllamaClient::new(

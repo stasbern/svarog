@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections;
-use std::fmt::format;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs;
 
 use color_eyre::Result;
@@ -14,11 +12,12 @@ use rig::{Embed, embeddings::EmbeddingsBuilder};
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
-use crate::rig::client;
+use sha2::{Sha256, Digest};
 
 #[derive(Embed, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 struct Chunk {
-    id: PathBuf,
+    chunk_index: usize,
+    file_path: String,
     #[embed]
     content: String,
 }
@@ -52,14 +51,35 @@ impl KnowledgeBase {
 
         if let Ok(mut entries) = fs::read_dir(&dir).await {
             while let Some(entry) = entries.next_entry().await? {
-                if let Ok(text) = fs::read_to_string(entry.path()).await {
-                    for chunk_text in Self::chunk_input(&text, 400) {
-                        chunks.push(Chunk {
-                            id: entry.path(),
-                            content: chunk_text,
-                        });
+                let Ok(text) = fs::read_to_string(entry.path()).await else {
+                    continue;
+                };
+
+                // Normalize path: forward slashes
+                let normalized_path = entry.path().to_string_lossy().replace('\\', "/");
+                let hash = Self::hash_content(&text);
+
+                // Skip unchanged files
+                if let Ok(Some(stored_hash)) = self.get_stored_hash(&normalized_path).await {
+                    if stored_hash == hash {
+                        continue;
                     }
                 }
+
+                // File is new or changed — remove old chunks
+                self.delete_chunks_for_file(&normalized_path).await?;
+
+                // Build new chunks with overlap
+                for (idx, chunk_text) in Self::chunk_input(&text, 400, 80).iter().enumerate() {
+                    chunks.push(Chunk {
+                        chunk_index: idx,
+                        file_path: normalized_path.clone(),
+                        content: chunk_text.clone(),
+                    });
+                }
+
+                // Update stored hash
+                self.store_hash(&normalized_path, &hash).await?;
             }
         }
 
@@ -72,8 +92,8 @@ impl KnowledgeBase {
             builder = builder.document(chunk)?;
         }
         let embeddings = builder.build().await?;
-
         self.vector_store().insert_documents(embeddings).await?;
+
         Ok(())
     }
 
@@ -81,7 +101,7 @@ impl KnowledgeBase {
         SurrealVectorStore::with_defaults(self.embedding_model.clone(), self.db.clone())
     }
 
-    fn chunk_input(text: &str, max_chars: usize) -> Vec<String> {
+    fn chunk_input(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
         const SEPARATORS: &[&str] = &["\n\n\n", "\n\n", "\n", ". ", ", ", " "];
 
         fn split_recursive(text: &str, max_chars: usize, sep_idx: usize) -> Vec<String> {
@@ -137,7 +157,23 @@ impl KnowledgeBase {
             }
             chunks
         }
-        split_recursive(text, max_chars, 0)
+        let raw = split_recursive(text, max_chars, 0);
+
+        if raw.len() <= 1 || overlap == 0 {
+                return raw;
+            }
+
+        let mut result = Vec::with_capacity(raw.len());
+        result.push(raw[0].clone());
+
+        for i in 1..raw.len() {
+            let prev_chars: Vec<char> = raw[i - 1].chars().collect();
+            let take = overlap.min(prev_chars.len());
+            let overlap_text: String = prev_chars[prev_chars.len() - take..].iter().collect();
+            result.push(format!("{}{}", overlap_text, raw[i]));
+        }
+
+        result
     }
 
     pub async fn search(&self, query: &str, top_k: u64) -> Result<Vec<SearchResult>> {
@@ -171,5 +207,49 @@ impl KnowledgeBase {
                 SearchResult { score, id, content }
             })
             .collect())
+    }
+
+    fn hash_content(content: &str) -> String {
+        let result = Sha256::digest(content.as_bytes());
+        result.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+    
+    async fn get_stored_hash(&self, file_path: &str) -> Result<Option<String>> {
+        let mut result = self
+            .db
+            .query("SELECT content_hash FROM file_hashes WHERE file_path = $path LIMIT 1")
+            .bind(("path", file_path))
+            .await?;
+
+        let hash: Option<String> = result.take(0)?;
+        Ok(hash)
+    }
+
+    async fn store_hash(&self, file_path: &str, hash: &str) -> Result<()> {
+        // Delete any existing record for this path, then create new one
+        self.db
+            .query("DELETE FROM file_hashes WHERE file_path = $path")
+            .bind(("path", file_path))
+            .await?;
+
+        self.db
+            .query("CREATE file_hashes SET file_path = $path, content_hash = $hash")
+            .bind(("path", file_path))
+            .bind(("hash", hash))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete_chunks_for_file(&self, file_path: &str) -> Result<()> {
+        // rig stores the serialized Chunk as a JSON string in the `document` column.
+        // We match on the "file_path":"..." fragment inside that JSON string.
+        let needle = format!("\"file_path\":\"{}\"", file_path);
+        self.db
+            .query("DELETE FROM documents WHERE string::contains(document, $needle)")
+            .bind(("needle", needle))
+            .await?;
+
+        Ok(())
     }
 }

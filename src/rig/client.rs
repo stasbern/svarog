@@ -20,7 +20,7 @@ pub struct OllamaClient {
 impl OllamaClient {
     pub fn new(model: &str, preamble: &str, temperature: f64) -> Self {
         Self {
-            client: Client::from_env().unwrap(),
+            client: Client::from_env().expect("Failed to connect to Ollama — is OLLAMA_HOST set?"),
             model: String::from(model),
             preamble: String::from(preamble),
             temperature,
