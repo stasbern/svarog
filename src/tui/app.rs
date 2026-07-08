@@ -151,7 +151,7 @@ impl App {
                     Response::ContextFound(contexts) => {
                         for (score, preview) in &contexts {
                             self.messages.push(ChatEntry::new(
-                                format!("kb: score {}", score),
+                                format!("kb: score {:.2}", score),
                                 preview.clone(),
                             ));
                         }

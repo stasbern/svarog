@@ -1,4 +1,5 @@
 use color_eyre::Result;
+use std::env;
 use std::sync::Arc;
 
 pub mod events;
@@ -11,18 +12,20 @@ use crate::rig::knowledge::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+    dotenvy::dotenv().expect(".env file was not read successfully");
 
     // initialize tokio mpsc channels
     let channels = events::Channels::new();
 
     // initialize ollama client and agent
     let client = OllamaClient::new(
-        "qwen3:30b-a3b-instruct-2507-q4_K_M",
-        "You help me figure out this job posting, do not invent anything, if the info is not in the context, simply say you don't know.",
+        &env::var("OLLAMA_BASE_MODEL")?,
+        &env::var("BASE_MODEL_PREAMBLE")?,
         0.1,
     );
 
-    let knowledge = Arc::new(KnowledgeBase::new(client.inner(), "nomic-embed-text").await?);
+    let knowledge =
+        Arc::new(KnowledgeBase::new(client.inner(), &env::var("OLLAMA_EMBEDDING_MODEL")?).await?);
 
     client.handle_completion(knowledge.clone(), channels.prompt_rx, channels.response_tx);
 
