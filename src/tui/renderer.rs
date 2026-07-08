@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
     text::Line,
     widgets::{Block, BorderType, Paragraph, Wrap},
 };
@@ -21,11 +21,13 @@ impl App {
         };
 
         let layout = Layout::vertical([
-            Constraint::Min(1),                          // messages
-            Constraint::Length(input_lines as u16 + 2),  // input box
-            Constraint::Length(1),                        // status + instructions
+            Constraint::Min(1),                         // messages
+            Constraint::Length(input_lines as u16 + 2), // input box
+            Constraint::Length(1),                      // status + instructions
         ]);
         let [messages_area, input_area, status_area] = frame.area().layout(&layout);
+        let base_style = Style::default().bg(self.theme.bg);
+        frame.render_widget(Block::default().style(base_style), frame.area());
 
         // ── Messages with per-sender blocks ──────────────────────────
         let outer_block = Block::bordered().title("Messages");
@@ -74,8 +76,8 @@ impl App {
             // Where in the viewport this message starts
             let viewport_y = msg_top.saturating_sub(self.scroll_offset);
             // How tall the visible portion is
-            let visible_h = (msg_h - hidden_top)
-                .min(messages_inner.height.saturating_sub(viewport_y));
+            let visible_h =
+                (msg_h - hidden_top).min(messages_inner.height.saturating_sub(viewport_y));
 
             if visible_h == 0 {
                 continue;
@@ -89,12 +91,24 @@ impl App {
             );
 
             let (border_color, border_type, sender_label) = match msg.sender.as_str() {
-                "user" => (self.theme.user_border, BorderType::Rounded, " you ".to_string()),
-                "svarog" => (self.theme.assistant_border, BorderType::Rounded, " svarog ".to_string()),
+                "user" => (
+                    self.theme.user_border,
+                    BorderType::Rounded,
+                    " you ".to_string(),
+                ),
+                "svarog" => (
+                    self.theme.assistant_border,
+                    BorderType::Rounded,
+                    " svarog ".to_string(),
+                ),
                 s if s.starts_with("kb:") => {
                     (self.theme.kb_border, BorderType::Plain, format!(" {} ", s))
                 }
-                _ => (self.theme.system_border, BorderType::Double, " system ".to_string()),
+                _ => (
+                    self.theme.system_border,
+                    BorderType::Double,
+                    " system ".to_string(),
+                ),
             };
 
             let block = Block::bordered()
@@ -123,8 +137,16 @@ impl App {
         frame.render_widget(input, input_area);
 
         if let InputMode::Editing = self.input_mode {
-            let cursor_line = if inner_width > 0 { self.char_index / inner_width } else { 0 };
-            let cursor_col = if inner_width > 0 { self.char_index % inner_width } else { 0 };
+            let cursor_line = if inner_width > 0 {
+                self.char_index / inner_width
+            } else {
+                0
+            };
+            let cursor_col = if inner_width > 0 {
+                self.char_index % inner_width
+            } else {
+                0
+            };
             frame.set_cursor_position(Position::new(
                 input_area.x + cursor_col as u16 + 1,
                 input_area.y + cursor_line as u16 + 1,
@@ -136,14 +158,16 @@ impl App {
 
         if self.ingesting {
             status_spans.push(" ⟳ ".into());
-            status_spans.push(
-                ratatui::text::Span::styled(&self.status_line, Style::default().fg(self.theme.status_busy)),
-            );
+            status_spans.push(ratatui::text::Span::styled(
+                &self.status_line,
+                Style::default().fg(self.theme.status_busy),
+            ));
             status_spans.push("  ".into());
         } else if !self.status_line.is_empty() {
-            status_spans.push(
-                ratatui::text::Span::styled(&self.status_line, Style::default().fg(self.theme.status_ok)),
-            );
+            status_spans.push(ratatui::text::Span::styled(
+                &self.status_line,
+                Style::default().fg(self.theme.status_ok),
+            ));
             status_spans.push("  ".into());
         }
 
@@ -151,22 +175,34 @@ impl App {
             InputMode::Normal => {
                 status_spans.extend_from_slice(&[
                     " Edit ".into(),
-                    ratatui::text::Span::styled("<E>", Style::default().fg(self.theme.accent).bold()),
+                    ratatui::text::Span::styled(
+                        "<E>",
+                        Style::default().fg(self.theme.accent).bold(),
+                    ),
                     " Ingest ".into(),
-                    ratatui::text::Span::styled("<I>", Style::default().fg(self.theme.accent).bold()),
+                    ratatui::text::Span::styled(
+                        "<I>",
+                        Style::default().fg(self.theme.accent).bold(),
+                    ),
                     " Scroll ".into(),
                     ratatui::text::Span::styled(
                         "<↑/↓>",
                         Style::default().fg(self.theme.accent).bold(),
                     ),
                     " Quit ".into(),
-                    ratatui::text::Span::styled("<Q>", Style::default().fg(self.theme.accent).bold()),
+                    ratatui::text::Span::styled(
+                        "<Q>",
+                        Style::default().fg(self.theme.accent).bold(),
+                    ),
                 ]);
             }
             InputMode::Editing => {
                 status_spans.extend_from_slice(&[
                     " Normal ".into(),
-                    ratatui::text::Span::styled("<Esc>", Style::default().fg(self.theme.accent).bold()),
+                    ratatui::text::Span::styled(
+                        "<Esc>",
+                        Style::default().fg(self.theme.accent).bold(),
+                    ),
                 ]);
             }
         }

@@ -1,6 +1,7 @@
 use ratatui::style::Color;
 
 pub struct Theme {
+    pub bg: Color,
     pub user_border: Color,
     pub assistant_border: Color,
     pub kb_border: Color,
@@ -15,15 +16,16 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            user_border:    Color::Rgb(145, 10, 103),
-            assistant_border: Color::Rgb(60, 7, 83),
-            kb_border:      Color::DarkGray,
-            system_border:  Color::Yellow,
-            input_active:   Color::Yellow,
+            bg: Color::Rgb(16, 20, 28),
+            user_border: Color::Rgb(92, 62, 148),
+            assistant_border: Color::Rgb(100, 13, 95),
+            kb_border: Color::DarkGray,
+            system_border: Color::Yellow,
+            input_active: Color::Rgb(242, 89, 18),
             input_disabled: Color::DarkGray,
-            accent:         Color::Rgb(60, 7, 83),
-            status_busy:    Color::Yellow,
-            status_ok:      Color::Green,
+            accent: Color::Rgb(242, 89, 18),
+            status_busy: Color::Yellow,
+            status_ok: Color::Green,
         }
     }
 }
