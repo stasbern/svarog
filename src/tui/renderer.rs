@@ -89,12 +89,12 @@ impl App {
             );
 
             let (border_color, border_type, sender_label) = match msg.sender.as_str() {
-                "user" => (Color::Cyan, BorderType::Rounded, " you ".to_string()),
-                "svarog" => (Color::Magenta, BorderType::Rounded, " svarog ".to_string()),
+                "user" => (self.theme.user_border, BorderType::Rounded, " you ".to_string()),
+                "svarog" => (self.theme.assistant_border, BorderType::Rounded, " svarog ".to_string()),
                 s if s.starts_with("kb:") => {
-                    (Color::DarkGray, BorderType::Plain, format!(" {} ", s))
+                    (self.theme.kb_border, BorderType::Plain, format!(" {} ", s))
                 }
-                _ => (Color::Yellow, BorderType::Double, " system ".to_string()),
+                _ => (self.theme.system_border, BorderType::Double, " system ".to_string()),
             };
 
             let block = Block::bordered()
@@ -113,8 +113,8 @@ impl App {
         // ── Input box ────────────────────────────────────────────────
         let input_style = match self.input_mode {
             InputMode::Normal => Style::default(),
-            InputMode::Editing if self.ingesting => Style::default().fg(Color::DarkGray),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
+            InputMode::Editing if self.ingesting => Style::default().fg(self.theme.input_disabled),
+            InputMode::Editing => Style::default().fg(self.theme.input_active),
         };
         let input = Paragraph::new(self.input.as_str())
             .wrap(Wrap { trim: true })
@@ -137,12 +137,12 @@ impl App {
         if self.ingesting {
             status_spans.push(" ⟳ ".into());
             status_spans.push(
-                ratatui::text::Span::styled(&self.status_line, Style::default().fg(Color::Yellow)),
+                ratatui::text::Span::styled(&self.status_line, Style::default().fg(self.theme.status_busy)),
             );
             status_spans.push("  ".into());
         } else if !self.status_line.is_empty() {
             status_spans.push(
-                ratatui::text::Span::styled(&self.status_line, Style::default().fg(Color::Green)),
+                ratatui::text::Span::styled(&self.status_line, Style::default().fg(self.theme.status_ok)),
             );
             status_spans.push("  ".into());
         }
@@ -151,22 +151,22 @@ impl App {
             InputMode::Normal => {
                 status_spans.extend_from_slice(&[
                     " Edit ".into(),
-                    ratatui::text::Span::styled("<E>", Style::default().fg(Color::Magenta).bold()),
+                    ratatui::text::Span::styled("<E>", Style::default().fg(self.theme.accent).bold()),
                     " Ingest ".into(),
-                    ratatui::text::Span::styled("<I>", Style::default().fg(Color::Magenta).bold()),
+                    ratatui::text::Span::styled("<I>", Style::default().fg(self.theme.accent).bold()),
                     " Scroll ".into(),
                     ratatui::text::Span::styled(
                         "<↑/↓>",
-                        Style::default().fg(Color::Magenta).bold(),
+                        Style::default().fg(self.theme.accent).bold(),
                     ),
                     " Quit ".into(),
-                    ratatui::text::Span::styled("<Q>", Style::default().fg(Color::Magenta).bold()),
+                    ratatui::text::Span::styled("<Q>", Style::default().fg(self.theme.accent).bold()),
                 ]);
             }
             InputMode::Editing => {
                 status_spans.extend_from_slice(&[
                     " Normal ".into(),
-                    ratatui::text::Span::styled("<Esc>", Style::default().fg(Color::Magenta).bold()),
+                    ratatui::text::Span::styled("<Esc>", Style::default().fg(self.theme.accent).bold()),
                 ]);
             }
         }

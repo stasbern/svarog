@@ -25,6 +25,8 @@ impl ChatEntry {
 }
 
 pub struct App {
+    pub theme: crate::tui::theme::Theme,
+
     pub input_mode: InputMode,
     pub input: String,
     pub messages: Vec<ChatEntry>,
@@ -52,6 +54,7 @@ impl App {
     ) -> Self {
         let (status_tx, status_rx) = mpsc::channel::<String>(32);
         Self {
+            theme: crate::tui::theme::Theme::default(),
             input: String::new(),
             char_index: 0,
             input_mode: InputMode::Normal,
