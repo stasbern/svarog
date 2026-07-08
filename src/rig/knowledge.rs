@@ -70,7 +70,7 @@ impl KnowledgeBase {
                 self.delete_chunks_for_file(&normalized_path).await?;
 
                 // Build new chunks with overlap
-                for (idx, chunk_text) in Self::chunk_input(&text, 400, 80).iter().enumerate() {
+                for (idx, chunk_text) in super::chunking::chunk_input(&text, 400, 80).iter().enumerate() {
                     chunks.push(Chunk {
                         chunk_index: idx,
                         file_path: normalized_path.clone(),
@@ -99,81 +99,6 @@ impl KnowledgeBase {
 
     pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
         SurrealVectorStore::with_defaults(self.embedding_model.clone(), self.db.clone())
-    }
-
-    fn chunk_input(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
-        const SEPARATORS: &[&str] = &["\n\n\n", "\n\n", "\n", ". ", ", ", " "];
-
-        fn split_recursive(text: &str, max_chars: usize, sep_idx: usize) -> Vec<String> {
-            if text.len() <= max_chars || sep_idx >= SEPARATORS.len() {
-                if text.len() <= max_chars {
-                    return if text.trim().is_empty() {
-                        vec![]
-                    } else {
-                        vec![text.to_string()]
-                    };
-                }
-                return text
-                    .chars()
-                    .collect::<Vec<_>>()
-                    .chunks(max_chars)
-                    .map(|c| c.iter().collect::<String>())
-                    .filter(|s| !s.trim().is_empty())
-                    .collect();
-            }
-
-            let sep = SEPARATORS[sep_idx];
-            let parts: Vec<&str> = text.split(sep).collect();
-
-            if parts.len() == 1 {
-                return split_recursive(text, max_chars, sep_idx + 1);
-            }
-
-            let mut chunks = Vec::new();
-            let mut current = String::new();
-
-            for part in parts {
-                let candidate = if current.is_empty() {
-                    part.to_string()
-                } else {
-                    format!("{}{}{}", current, sep, part)
-                };
-                if candidate.len() <= max_chars {
-                    current = candidate;
-                } else {
-                    if !current.trim().is_empty() {
-                        chunks.push(current);
-                    }
-                    if part.len() > max_chars {
-                        chunks.extend(split_recursive(part, max_chars, sep_idx + 1));
-                        current = String::new();
-                    } else {
-                        current = part.to_string();
-                    }
-                }
-            }
-            if !current.trim().is_empty() {
-                chunks.push(current);
-            }
-            chunks
-        }
-        let raw = split_recursive(text, max_chars, 0);
-
-        if raw.len() <= 1 || overlap == 0 {
-                return raw;
-            }
-
-        let mut result = Vec::with_capacity(raw.len());
-        result.push(raw[0].clone());
-
-        for i in 1..raw.len() {
-            let prev_chars: Vec<char> = raw[i - 1].chars().collect();
-            let take = overlap.min(prev_chars.len());
-            let overlap_text: String = prev_chars[prev_chars.len() - take..].iter().collect();
-            result.push(format!("{}{}", overlap_text, raw[i]));
-        }
-
-        result
     }
 
     pub async fn search(&self, query: &str, top_k: u64) -> Result<Vec<SearchResult>> {

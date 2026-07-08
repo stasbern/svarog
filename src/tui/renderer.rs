@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Text},
+    text::Line,
     widgets::{Block, BorderType, Paragraph, Wrap},
 };
 
@@ -151,22 +151,22 @@ impl App {
             InputMode::Normal => {
                 status_spans.extend_from_slice(&[
                     " Edit ".into(),
-                    ratatui::text::Span::styled("<E>", Style::default().fg(Color::Blue).bold()),
+                    ratatui::text::Span::styled("<E>", Style::default().fg(Color::Magenta).bold()),
                     " Ingest ".into(),
-                    ratatui::text::Span::styled("<I>", Style::default().fg(Color::Blue).bold()),
+                    ratatui::text::Span::styled("<I>", Style::default().fg(Color::Magenta).bold()),
                     " Scroll ".into(),
                     ratatui::text::Span::styled(
                         "<↑/↓>",
-                        Style::default().fg(Color::Blue).bold(),
+                        Style::default().fg(Color::Magenta).bold(),
                     ),
                     " Quit ".into(),
-                    ratatui::text::Span::styled("<Q>", Style::default().fg(Color::Blue).bold()),
+                    ratatui::text::Span::styled("<Q>", Style::default().fg(Color::Magenta).bold()),
                 ]);
             }
             InputMode::Editing => {
                 status_spans.extend_from_slice(&[
                     " Normal ".into(),
-                    ratatui::text::Span::styled("<Esc>", Style::default().fg(Color::Blue).bold()),
+                    ratatui::text::Span::styled("<Esc>", Style::default().fg(Color::Magenta).bold()),
                 ]);
             }
         }

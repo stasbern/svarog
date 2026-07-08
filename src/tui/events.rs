@@ -1,6 +1,6 @@
 use color_eyre::{Result, eyre::WrapErr};
 use ratatui::crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
