@@ -1,4 +1,5 @@
 /target
+/input
 .env
 Cargo.lock
 svarog_vectors.db
