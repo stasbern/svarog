@@ -38,7 +38,7 @@ impl App {
             ConsoleMode::Logs => {
                 Self::render_entries(
                     frame, &self.logs, &mut self.log_scroll_offset,
-                    true, content_area, "Logs",
+                    self.follow_logs, content_area, "Logs",
                     &self.theme, &mut self.last_viewport,
                 );
             }

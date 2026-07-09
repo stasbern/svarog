@@ -37,6 +37,7 @@ pub struct App {
 
     pub log_scroll_offset: u16,
     pub logs: Vec<ChatEntry>,    
+    pub follow_logs: bool,
 
     pub last_viewport: (u16, u16),
     pub ingesting: bool,
@@ -61,6 +62,7 @@ impl App {
             logs: Vec::new(),
             ingesting: false,
             follow_output: true,
+            follow_logs: true,
             status_line: String::new(),
             last_viewport: (0, 0),
             exit: false,
@@ -96,8 +98,9 @@ impl App {
     pub fn scroll_up(&mut self, lines: u16) {
         let offset = self.active_scroll_offset_mut();
         *offset = offset.saturating_sub(lines);
-        if matches!(self.console_mode, ConsoleMode::Normal | ConsoleMode::Editing) {
-            self.follow_output = false;
+        match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Editing => self.follow_output = false,
+            ConsoleMode::Logs => self.follow_logs = false,
         }
     }
 
@@ -114,8 +117,13 @@ impl App {
         *offset = offset.saturating_add(lines).min(max_scroll);
         let at_bottom = *offset >= max_scroll;
 
-        if matches!(self.console_mode, ConsoleMode::Normal | ConsoleMode::Editing) && at_bottom {
-            self.follow_output = true;
+        match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Editing => {
+                if at_bottom { self.follow_output = true; }
+            }
+            ConsoleMode::Logs => {
+                if at_bottom { self.follow_logs = true; }
+            }
         }
     }
 
