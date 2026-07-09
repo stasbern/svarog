@@ -65,22 +65,21 @@ impl KnowledgeBase {
     pub async fn ingest_file(&self, path: &str, text: &str, ns: Namespace) -> Result<()> {
         self.delete_chunks_for_file(path, ns).await?;
 
+        let filename = path.rsplit('/').next().unwrap_or(path);
         let chunks: Vec<Chunk> = super::chunking::chunk_input(text, 400, 80)
             .into_iter()
             .enumerate()
-            .map(|(idx, content)| Chunk {
+            .map(|(idx, chunk_text)| Chunk {
                 chunk_index: idx,
                 file_path: path.to_string(),
-                content,
+                content: format!("Source: {filename}\n{chunk_text}"),
             })
             .collect();
 
         if !chunks.is_empty() {
             let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
             for chunk in chunks {
-                let filename = path.rsplit('/').next().unwrap_or(path);
-                let enriched = format!("Source: {}\n{}", filename, chunk.content);
-                builder = builder.document(enriched)?;
+                builder = builder.document(chunk)?;
             }
             let embeddings = builder.build().await?;
             self.vector_store_for(ns).insert_documents(embeddings).await?;
