@@ -5,10 +5,11 @@ use tokio::sync::mpsc;
 use crate::events::*;
 
 #[derive(Debug, Default)]
-pub enum InputMode {
+pub enum ConsoleMode {
     #[default]
-    Normal,
-    Editing,
+    Normal,   // chat view, navigation keys
+    Editing,  // chat view, typing in input
+    Logs,     // logs view, navigation keys
 }
 
 pub struct ChatEntry {
@@ -25,17 +26,20 @@ impl ChatEntry {
 pub struct App {
     pub theme: crate::tui::theme::Theme,
     
-    pub input_mode: InputMode,
+    pub console_mode: ConsoleMode,
+
     pub input: String,
     pub messages: Vec<ChatEntry>,
-    pub scroll_offset: u16,
+    pub chat_scroll_offset: u16,
     pub char_index: usize,
-    pub ingesting: bool,
     pub follow_output: bool,
     pub status_line: String,
-    pub last_viewport: (u16, u16),
-    
 
+    pub log_scroll_offset: u16,
+    pub logs: Vec<ChatEntry>,    
+
+    pub last_viewport: (u16, u16),
+    pub ingesting: bool,
     exit: bool,
     pub tx: mpsc::Sender<Request>,
     pub rx: mpsc::Receiver<Response>,
@@ -50,9 +54,11 @@ impl App {
             theme: crate::tui::theme::Theme::default(),
             input: String::new(),
             char_index: 0,
-            input_mode: InputMode::Normal,
+            console_mode: ConsoleMode::Normal,
             messages: Vec::new(),
-            scroll_offset: 0,
+            chat_scroll_offset: 0,
+            log_scroll_offset: 0,
+            logs: Vec::new(),
             ingesting: false,
             follow_output: true,
             status_line: String::new(),
@@ -88,14 +94,14 @@ impl App {
     }
 
     pub fn scroll_up(&mut self, lines: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.chat_scroll_offset = self.chat_scroll_offset.saturating_sub(lines);
         self.follow_output = false;
     }
 
     pub fn scroll_down(&mut self, lines: u16, viewport_height: u16, total_height: u16) {
         let max_scroll = total_height.saturating_sub(viewport_height);
-        self.scroll_offset = self.scroll_offset.saturating_add(lines).min(max_scroll);
-        if self.scroll_offset >= max_scroll {
+        self.chat_scroll_offset = self.chat_scroll_offset.saturating_add(lines).min(max_scroll);
+        if self.chat_scroll_offset >= max_scroll {
             self.follow_output = true;
         }
     }
@@ -191,12 +197,14 @@ impl App {
                         }
                     }
                     Response::Status(status) => {
+                        self.logs.push(ChatEntry::new("status".into(), status.clone()));
                         if status.contains("complete") || status.contains("failed") {
                             self.ingesting = false;
                         }
                         self.status_line = status;
                     }
                     Response::Error(e) => {
+                        self.logs.push(ChatEntry::new("error".into(), e.clone()));
                         self.status_line = format!("Error: {e}");
                     }
                 }

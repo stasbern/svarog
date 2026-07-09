@@ -10,203 +10,173 @@ use crate::tui::app::*;
 
 impl App {
     pub fn render(&mut self, frame: &mut Frame) {
-        let title = Line::from(" svarog ".bold());
-
         let inner_width = frame.area().width.saturating_sub(2) as usize;
         let input_lines = if inner_width > 0 {
-            let char_count = self.input.chars().count();
-            (char_count / inner_width) + 1
-        } else {
-            1
-        };
+            (self.input.chars().count() / inner_width) + 1
+        } else { 1 };
 
         let layout = Layout::vertical([
-            Constraint::Min(1),                         // messages
-            Constraint::Length(input_lines as u16 + 2), // input box
-            Constraint::Length(1),                      // status + instructions
+            Constraint::Min(1),
+            Constraint::Length(input_lines as u16 + 2),
+            Constraint::Length(1),
         ]);
-        let [messages_area, input_area, status_area] = frame.area().layout(&layout);
-        let base_style = Style::default().bg(self.theme.bg);
-        frame.render_widget(Block::default().style(base_style), frame.area());
+        let [content_area, input_area, status_area] = frame.area().layout(&layout);
 
-        // ── Messages with per-sender blocks ──────────────────────────
-        let outer_block = Block::bordered().title("Messages");
-        let messages_inner = outer_block.inner(messages_area);
-        frame.render_widget(outer_block, messages_area);
+        frame.render_widget(
+            Block::default().style(Style::default().bg(self.theme.bg)),
+            frame.area(),
+        );
 
-        self.last_viewport = (messages_inner.width, messages_inner.height);
-
-        // Width available inside each message's own block borders
-        let msg_inner_width = messages_inner.width.saturating_sub(2) as usize;
-
-        // Pre-calculate height of each message block
-        let msg_heights: Vec<u16> = self
-            .messages
-            .iter()
-            .map(|m| App::wrapped_line_count(&m.message, msg_inner_width) + 2) // +2 for block borders
-            .collect();
-        let total_content_height: u16 = msg_heights.iter().sum();
-
-        // Auto-scroll to bottom if following output
-        if self.follow_output {
-            self.scroll_offset = total_content_height.saturating_sub(messages_inner.height);
+        match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Editing => {
+                Self::render_entries(
+                    frame, &self.messages, &mut self.chat_scroll_offset,
+                    self.follow_output, content_area, "Messages",
+                    &self.theme, &mut self.last_viewport,
+                );
+            }
+            ConsoleMode::Logs => {
+                Self::render_entries(
+                    frame, &self.logs, &mut self.log_scroll_offset,
+                    true, content_area, "Logs",
+                    &self.theme, &mut self.last_viewport,
+                );
+            }
         }
-        // Clamp scroll
-        let max_scroll = total_content_height.saturating_sub(messages_inner.height);
-        self.scroll_offset = self.scroll_offset.min(max_scroll);
 
-        // Render visible messages
+        self.render_input(frame, input_area, inner_width);
+        self.render_status_bar(frame, status_area);
+    }
+
+    fn render_entries(
+        frame: &mut Frame,
+        entries: &[ChatEntry],
+        scroll_offset: &mut u16,
+        follow: bool,
+        area: Rect,
+        title: &str,
+        theme: &crate::tui::theme::Theme,
+        last_viewport: &mut (u16, u16),
+    ) {
+        let outer_block = Block::bordered().title(title);
+        let inner = outer_block.inner(area);
+        frame.render_widget(outer_block, area);
+
+        *last_viewport = (inner.width, inner.height);
+        let msg_inner_width = inner.width.saturating_sub(2) as usize;
+
+        let msg_heights: Vec<u16> = entries
+            .iter()
+            .map(|m| App::wrapped_line_count(&m.message, msg_inner_width) + 2)
+            .collect();
+        let total_h: u16 = msg_heights.iter().sum();
+
+        if follow {
+            *scroll_offset = total_h.saturating_sub(inner.height);
+        }
+        let max_scroll = total_h.saturating_sub(inner.height);
+        *scroll_offset = (*scroll_offset).min(max_scroll);
+
         let mut cumulative_y: u16 = 0;
-        for (i, msg) in self.messages.iter().enumerate() {
+        for (i, msg) in entries.iter().enumerate() {
             let msg_h = msg_heights[i];
             let msg_top = cumulative_y;
             cumulative_y += msg_h;
 
-            // Skip if entirely above viewport
-            if cumulative_y <= self.scroll_offset {
-                continue;
-            }
-            // Stop if entirely below viewport
-            if msg_top >= self.scroll_offset + messages_inner.height {
-                break;
-            }
+            if cumulative_y <= *scroll_offset { continue; }
+            if msg_top >= *scroll_offset + inner.height { break; }
 
-            // How many lines of this message are hidden above the viewport
-            let hidden_top = self.scroll_offset.saturating_sub(msg_top);
-            // Where in the viewport this message starts
-            let viewport_y = msg_top.saturating_sub(self.scroll_offset);
-            // How tall the visible portion is
-            let visible_h =
-                (msg_h - hidden_top).min(messages_inner.height.saturating_sub(viewport_y));
+            let hidden_top = scroll_offset.saturating_sub(msg_top);
+            let viewport_y = msg_top.saturating_sub(*scroll_offset);
+            let visible_h = (msg_h - hidden_top).min(inner.height.saturating_sub(viewport_y));
+            if visible_h == 0 { continue; }
 
-            if visible_h == 0 {
-                continue;
-            }
+            let rect = Rect::new(inner.x, inner.y + viewport_y, inner.width, visible_h);
 
-            let render_rect = Rect::new(
-                messages_inner.x,
-                messages_inner.y + viewport_y,
-                messages_inner.width,
-                visible_h,
-            );
-
-            let (border_color, border_type, sender_label) = match msg.sender.as_str() {
-                "user" => (
-                    self.theme.user_border,
-                    BorderType::Rounded,
-                    " you ".to_string(),
-                ),
-                "svarog" => (
-                    self.theme.assistant_border,
-                    BorderType::Rounded,
-                    " svarog ".to_string(),
-                ),
-                s if s.starts_with("kb:") => {
-                    (self.theme.kb_border, BorderType::Plain, format!(" {} ", s))
-                }
-                _ => (
-                    self.theme.system_border,
-                    BorderType::Double,
-                    " system ".to_string(),
-                ),
+            let (border_color, border_type, label) = match msg.sender.as_str() {
+                "user" => (theme.user_border, BorderType::Rounded, " you ".into()),
+                "svarog" => (theme.assistant_border, BorderType::Rounded, " svarog ".into()),
+                s if s.starts_with("kb:") => (theme.kb_border, BorderType::Plain, format!(" {s} ")),
+                "error" => (theme.status_busy, BorderType::Double, " error ".into()),
+                "status" => (theme.status_ok, BorderType::Plain, " status ".into()),
+                _ => (theme.system_border, BorderType::Double, " system ".into()),
             };
 
             let block = Block::bordered()
-                .title(Line::from(sender_label).style(Style::default().fg(border_color)))
+                .title(Line::from(label).style(Style::default().fg(border_color)))
                 .border_type(border_type)
                 .border_style(Style::default().fg(border_color));
 
             let paragraph = Paragraph::new(msg.message.as_str())
                 .wrap(Wrap { trim: true })
                 .block(block)
-                .scroll((hidden_top, 0)); // scroll past the hidden top lines
+                .scroll((hidden_top, 0));
 
-            frame.render_widget(paragraph, render_rect);
+            frame.render_widget(paragraph, rect);
         }
+    }
 
-        // ── Input box ────────────────────────────────────────────────
-        let input_style = match self.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing if self.ingesting => Style::default().fg(self.theme.input_disabled),
-            InputMode::Editing => Style::default().fg(self.theme.input_active),
+    fn render_input(&self, frame: &mut Frame, area: Rect, inner_width: usize) {
+        let title = Line::from(" svarog ".bold());
+        let input_style = match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Logs => Style::default(),
+            ConsoleMode::Editing if self.ingesting => Style::default().fg(self.theme.input_disabled),
+            ConsoleMode::Editing => Style::default().fg(self.theme.input_active),
         };
+
         let input = Paragraph::new(self.input.as_str())
             .wrap(Wrap { trim: true })
             .style(input_style)
             .block(Block::bordered().title(title.centered()));
-        frame.render_widget(input, input_area);
+        frame.render_widget(input, area);
 
-        if let InputMode::Editing = self.input_mode {
-            let cursor_line = if inner_width > 0 {
-                self.char_index / inner_width
-            } else {
-                0
-            };
-            let cursor_col = if inner_width > 0 {
-                self.char_index % inner_width
-            } else {
-                0
-            };
+        if matches!(self.console_mode, ConsoleMode::Editing) {
+            let cursor_line = if inner_width > 0 { self.char_index / inner_width } else { 0 };
+            let cursor_col = if inner_width > 0 { self.char_index % inner_width } else { 0 };
             frame.set_cursor_position(Position::new(
-                input_area.x + cursor_col as u16 + 1,
-                input_area.y + cursor_line as u16 + 1,
+                area.x + cursor_col as u16 + 1,
+                area.y + cursor_line as u16 + 1,
             ));
         }
+    }
 
-        // ── Status bar + instructions ────────────────────────────────
-        let mut status_spans: Vec<ratatui::text::Span> = vec![];
+    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::text::Span;
+        let mut spans: Vec<Span> = vec![];
 
         if self.ingesting {
-            status_spans.push(" ⟳ ".into());
-            status_spans.push(ratatui::text::Span::styled(
-                &self.status_line,
-                Style::default().fg(self.theme.status_busy),
-            ));
-            status_spans.push("  ".into());
+            spans.push(" ⟳ ".into());
+            spans.push(Span::styled(&self.status_line, Style::default().fg(self.theme.status_busy)));
+            spans.push("  ".into());
         } else if !self.status_line.is_empty() {
-            status_spans.push(ratatui::text::Span::styled(
-                &self.status_line,
-                Style::default().fg(self.theme.status_ok),
-            ));
-            status_spans.push("  ".into());
+            spans.push(Span::styled(&self.status_line, Style::default().fg(self.theme.status_ok)));
+            spans.push("  ".into());
         }
 
-        match self.input_mode {
-            InputMode::Normal => {
-                status_spans.extend_from_slice(&[
-                    " Edit ".into(),
-                    ratatui::text::Span::styled(
-                        "<E>",
-                        Style::default().fg(self.theme.accent).bold(),
-                    ),
-                    " Ingest ".into(),
-                    ratatui::text::Span::styled(
-                        "<I>",
-                        Style::default().fg(self.theme.accent).bold(),
-                    ),
-                    " Scroll ".into(),
-                    ratatui::text::Span::styled(
-                        "<↑/↓>",
-                        Style::default().fg(self.theme.accent).bold(),
-                    ),
-                    " Quit ".into(),
-                    ratatui::text::Span::styled(
-                        "<Q>",
-                        Style::default().fg(self.theme.accent).bold(),
-                    ),
+        let accent = |s: &'static str| Span::styled(s, Style::default().fg(self.theme.accent).bold());
+
+        match self.console_mode {
+            ConsoleMode::Normal => {
+                spans.extend([
+                    " Edit ".into(), accent("<E>"),
+                    " Ingest ".into(), accent("<I>"),
+                    " Logs ".into(), accent("<L>"),
+                    " Scroll ".into(), accent("<↑/↓>"),
+                    " Quit ".into(), accent("<Q>"),
                 ]);
             }
-            InputMode::Editing => {
-                status_spans.extend_from_slice(&[
-                    " Normal ".into(),
-                    ratatui::text::Span::styled(
-                        "<Esc>",
-                        Style::default().fg(self.theme.accent).bold(),
-                    ),
+            ConsoleMode::Editing => {
+                spans.extend([" Normal ".into(), accent("<Esc>")]);
+            }
+            ConsoleMode::Logs => {
+                spans.extend([
+                    " Back ".into(), accent("<Esc>"),
+                    " Scroll ".into(), accent("<↑/↓>"),
+                    " Quit ".into(), accent("<Q>"),
                 ]);
             }
         }
 
-        frame.render_widget(Paragraph::new(Line::from(status_spans)), status_area);
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 }

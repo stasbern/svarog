@@ -112,7 +112,7 @@ impl OllamaClient {
                                 let _ = response_tx.send(Response::CompleteResponse(text)).await;
                             }
                             Err(e) => {
-                                eprintln!("{:?}", e);
+                                let _ = response_tx.send(Response::Error(format!("{e:?}"))).await;
                             }
                         }
                     }

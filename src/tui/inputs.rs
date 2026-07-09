@@ -14,14 +14,19 @@ impl App {
                 match event {
                     Event::Key(key) => {
                         if key.kind == KeyEventKind::Press {
-                            match self.input_mode {
-                                InputMode::Normal => self
+                            match self.console_mode {
+                                ConsoleMode::Normal => self
                                     .handle_normal_mode(key)
                                     .await
                                     .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
 
-                                InputMode::Editing => self
+                                ConsoleMode::Editing => self
                                     .handle_editing_mode(key)
+                                    .await
+                                    .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
+
+                                ConsoleMode::Logs => self
+                                    .handle_logs_mode(key)
                                     .await
                                     .wrap_err_with(|| format!("handling key event failed:\n{key:#?}")),
                             }
@@ -40,9 +45,8 @@ impl App {
 
     pub async fn handle_normal_mode(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Char('e') => {
-                self.input_mode = InputMode::Editing;
-            }
+            KeyCode::Char('e') => self.console_mode = ConsoleMode::Editing,
+            KeyCode::Char('l') => self.console_mode = ConsoleMode::Logs,
             KeyCode::Char('i') if !self.ingesting => {
                 self.ingesting = true;
                 self.status_line = "Ingesting documents...".into();
@@ -69,9 +73,27 @@ impl App {
             KeyCode::Char(to_insert) => self.enter_char(to_insert),
             KeyCode::Left => self.move_cursor_left(),
             KeyCode::Right => self.move_cursor_right(),
-            KeyCode::Esc => self.input_mode = InputMode::Normal,
+            KeyCode::Esc => self.console_mode = ConsoleMode::Normal,
             KeyCode::End => self.move_cursor_to_end(),
             KeyCode::Home => self.reset_cursor(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub async fn handle_logs_mode(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => self.console_mode = ConsoleMode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(3);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let viewport_h = self.last_viewport.1;
+                let total_h = Self::total_content_height(&self.logs, self.last_viewport.0);
+                let max = total_h.saturating_sub(viewport_h);
+                self.log_scroll_offset = self.log_scroll_offset.saturating_add(3).min(max);
+            }
+            KeyCode::Char('q') => self.exit(),
             _ => {}
         }
         Ok(())

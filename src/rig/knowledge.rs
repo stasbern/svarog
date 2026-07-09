@@ -157,7 +157,7 @@ impl KnowledgeBase {
         for &ns in namespaces {
             match self.search_namespace(query, ns, top_k).await {
                 Ok(mut results) => all.append(&mut results),
-                Err(e) => eprintln!("search {} failed: {e}", ns),
+                Err(_) => {}, // table may not exist yet
             }
         }
         all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
