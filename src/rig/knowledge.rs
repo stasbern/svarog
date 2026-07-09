@@ -78,7 +78,9 @@ impl KnowledgeBase {
         if !chunks.is_empty() {
             let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
             for chunk in chunks {
-                builder = builder.document(chunk)?;
+                let filename = path.rsplit('/').next().unwrap_or(path);
+                let enriched = format!("Source: {}\n{}", filename, chunk.content);
+                builder = builder.document(enriched)?;
             }
             let embeddings = builder.build().await?;
             self.vector_store_for(ns).insert_documents(embeddings).await?;
