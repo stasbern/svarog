@@ -1,10 +1,8 @@
 use color_eyre::{Result, eyre::WrapErr};
 use ratatui::{DefaultTerminal, crossterm::event::EventStream};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::events::*;
-use crate::rig::knowledge::KnowledgeBase;
 
 #[derive(Debug, Default)]
 pub enum InputMode {
@@ -47,9 +45,7 @@ impl App {
     pub fn new(
         tx: mpsc::Sender<Request>,
         rx: mpsc::Receiver<Response>,
-        knowledge: Arc<KnowledgeBase>,
     ) -> Self {
-        let (status_tx, status_rx) = mpsc::channel::<String>(32);
         Self {
             theme: crate::tui::theme::Theme::default(),
             input: String::new(),

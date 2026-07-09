@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::collections::HashMap;
 use tokio::fs;
 
 use color_eyre::Result;
@@ -37,11 +38,11 @@ pub struct KnowledgeBase {
 }
 
 impl KnowledgeBase {
-    pub async fn new(client: &ollama::Client, embeddig_model_name: &str) -> Result<Self> {
+    pub async fn new(client: &ollama::Client, embedding_model_name: &str) -> Result<Self> {
         let db = Surreal::new::<RocksDb>("svarog_vectors.db").await?;
         db.use_ns("svarog_ns").use_db("svarog_db").await?;
 
-        let embedding_model = client.embedding_model(embeddig_model_name);
+        let embedding_model = client.embedding_model(embedding_model_name);
 
         Ok(Self {
             embedding_model,
@@ -49,52 +50,70 @@ impl KnowledgeBase {
         })
     }
 
+    pub async fn get_all_hashes(&self) -> Result<HashMap<String, (String, String)>> {
+        let mut result = self.db
+            .query("SELECT VALUE [file_path, namespace, content_hash] FROM file_hashes")
+            .await?;
+        let rows: Vec<(String, String, String)> = result.take(0)?;
+        Ok(rows
+            .into_iter()
+            .map(|(path, ns, hash)| (path, (ns, hash)))
+            .collect())
+    }
+
+    /// Ingest a single file: delete old chunks → chunk → embed → insert → store hash.
+    pub async fn ingest_file(&self, path: &str, text: &str, ns: Namespace) -> Result<()> {
+        self.delete_chunks_for_file(path, ns).await?;
+
+        let chunks: Vec<Chunk> = super::chunking::chunk_input(text, 400, 80)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, content)| Chunk {
+                chunk_index: idx,
+                file_path: path.to_string(),
+                content,
+            })
+            .collect();
+
+        if !chunks.is_empty() {
+            let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+            for chunk in chunks {
+                builder = builder.document(chunk)?;
+            }
+            let embeddings = builder.build().await?;
+            self.vector_store_for(ns).insert_documents(embeddings).await?;
+        }
+
+        let hash = Self::hash_content(text);
+        self.store_hash(path, &hash, ns).await?;
+        Ok(())
+    }
+
     pub async fn ingest_directory(&self, dir: &Path, ns: Namespace) -> Result<()> {
+        let stored = self.get_all_hashes().await.unwrap_or_default();
+
         if let Ok(mut entries) = fs::read_dir(&dir).await {
             while let Some(entry) = entries.next_entry().await? {
                 let Ok(text) = fs::read_to_string(entry.path()).await else {
                     continue;
                 };
-
-                let normalized_path = entry.path().to_string_lossy().replace('\\', "/");
+                let path = entry.path().to_string_lossy().replace('\\', "/");
                 let hash = Self::hash_content(&text);
 
-                // Skip unchanged files (check within this namespace)
-                if let Ok(Some(stored_hash)) = self.get_stored_hash(&normalized_path, ns).await {
-                    if stored_hash == hash {
+                if let Some((_, stored_hash)) = stored.get(&path) {
+                    if *stored_hash == hash {
                         continue;
                     }
                 }
 
-                self.delete_chunks_for_file(&normalized_path, ns).await?;
-
-                let mut chunks: Vec<Chunk> = vec![];
-                for (idx, chunk_text) in super::chunking::chunk_input(&text, 400, 80).iter().enumerate() {
-                    chunks.push(Chunk {
-                        chunk_index: idx,
-                        file_path: normalized_path.clone(),
-                        content: chunk_text.clone(),
-                    });
-                }
-
-                if !chunks.is_empty() {
-                    let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
-                    for chunk in chunks {
-                        builder = builder.document(chunk)?;
-                    }
-                    let embeddings = builder.build().await?;
-                    self.vector_store_for(ns).insert_documents(embeddings).await?;
-                }
-
-                self.store_hash(&normalized_path, &hash, ns).await?;
+                self.ingest_file(&path, &text, ns).await?;
             }
         }
-
         Ok(())
     }
 
     pub fn vector_store_for(&self, ns: Namespace) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
-        SurrealVectorStore::new(self.embedding_model.clone(), self.db.clone(), Some((ns.table_name().to_string())), SurrealDistanceFunction::Cosine)
+        SurrealVectorStore::new(self.embedding_model.clone(), self.db.clone(), Some(ns.table_name().to_string()), SurrealDistanceFunction::Cosine)
     }
 
     pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
@@ -146,11 +165,12 @@ impl KnowledgeBase {
         Ok(all)
     }
 
-    fn hash_content(content: &str) -> String {
+    pub fn hash_content(content: &str) -> String {
         let result = Sha256::digest(content.as_bytes());
         result.iter().map(|b| format!("{:02x}", b)).collect()
     }
     
+    #[allow(dead_code)]
     async fn get_stored_hash(&self, file_path: &str, ns: Namespace) -> Result<Option<String>> {
         let mut result = self.db
             .query("SELECT VALUE content_hash FROM file_hashes WHERE file_path = $path AND namespace = $ns LIMIT 1")
@@ -163,9 +183,8 @@ impl KnowledgeBase {
 
     async fn store_hash(&self, file_path: &str, hash: &str, ns: Namespace) -> Result<()> {
         self.db
-            .query("DELETE FROM file_hashes WHERE file_path = $path AND namespace = $ns")
+            .query("DELETE FROM file_hashes WHERE file_path = $path")
             .bind(("path", file_path))
-            .bind(("ns", ns.to_string()))
             .await?;
         self.db
             .query("CREATE file_hashes SET file_path = $path, content_hash = $hash, namespace = $ns")
@@ -176,7 +195,7 @@ impl KnowledgeBase {
         Ok(())
     }
 
-    async fn delete_chunks_for_file(&self, file_path: &str, ns: Namespace) -> Result<()> {
+    pub async fn delete_chunks_for_file(&self, file_path: &str, ns: Namespace) -> Result<()> {
         let needle = format!("\"file_path\":\"{}\"", file_path);
         let query = format!(
             "DELETE FROM {} WHERE string::contains(document, $needle)",

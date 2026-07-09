@@ -3,8 +3,10 @@ use std::env;
 use std::sync::Arc;
 
 pub mod events;
+
 pub mod tui;
 use crate::tui::app::*;
+
 pub mod rig;
 use crate::rig::client::*;
 use crate::rig::knowledge::*;
@@ -31,7 +33,7 @@ async fn main() -> Result<()> {
 
     // initialize tui with channels
     let mut terminal = ratatui::init();
-    let app_result = App::new(channels.prompt_tx, channels.response_rx, knowledge.clone())
+    let app_result = App::new(channels.prompt_tx, channels.response_rx)
         .run(&mut terminal)
         .await;
 

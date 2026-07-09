@@ -117,14 +117,68 @@ impl OllamaClient {
                         }
                     }
                     Request::Ingest => {
-                        // spawn sub-task so we don't block the loop
-                        let kb = knowledge.clone();
-                        let client_clone = client.clone();
-                        let tx = response_tx.clone();
-                        tokio::spawn(async move {
-                            // read dir, classify_text, ingest_file, send Status updates
-                            let _ = tx.send(Response::Status("Ingestion complete".into())).await;
-                        });
+                        let classifier = client
+                            .agent(&model)
+                            .preamble(Namespace::classifier_prompt())
+                            .temperature(0.0)
+                            .build();
+
+                        let dir = std::path::PathBuf::from("./input");
+                        let stored_hashes = knowledge.get_all_hashes().await.unwrap_or_default();
+
+                        match tokio::fs::read_dir(&dir).await {
+                            Ok(mut entries) => {
+                                while let Ok(Some(entry)) = entries.next_entry().await {
+                                    let Ok(text) = tokio::fs::read_to_string(entry.path()).await else {
+                                        continue;
+                                    };
+                                    let fname = entry.file_name().to_string_lossy().to_string();
+                                    let path = entry.path().to_string_lossy().replace('\\', "/");
+                                    let hash = KnowledgeBase::hash_content(&text);
+
+                                    // Skip unchanged files
+                                    if let Some((_, stored_hash)) = stored_hashes.get(&path) {
+                                        if *stored_hash == hash {
+                                            let _ = response_tx.send(Response::Status(
+                                                format!("{fname} unchanged, skipping")
+                                            )).await;
+                                            continue;
+                                        }
+                                    }
+
+                                    // Classify via the single classifier agent
+                                    let preview: String = text.chars().take(800).collect();
+                                    let ns = match classifier.prompt(&preview).await {
+                                        Ok(resp) => Namespace::parse(&resp),
+                                        Err(_) => Namespace::Factual,
+                                    };
+
+                                    let _ = response_tx.send(Response::Status(
+                                        format!("{fname} → {ns}")
+                                    )).await;
+
+                                    // Clean old namespace if it changed
+                                    if let Some((old_ns_str, _)) = stored_hashes.get(&path) {
+                                        let old_ns = Namespace::parse(old_ns_str);
+                                        if old_ns != ns {
+                                            let _ = knowledge.delete_chunks_for_file(&path, old_ns).await;
+                                        }
+                                    }
+
+                                    if let Err(e) = knowledge.ingest_file(&path, &text, ns).await {
+                                        let _ = response_tx.send(Response::Status(
+                                            format!("Failed {fname}: {e}")
+                                        )).await;
+                                    }
+                                }
+                                let _ = response_tx.send(Response::Status("Ingestion complete".into())).await;
+                            }
+                            Err(e) => {
+                                let _ = response_tx.send(Response::Status(
+                                    format!("Failed to read input dir: {e}")
+                                )).await;
+                            }
+                        }
                     }
                 }
             }
