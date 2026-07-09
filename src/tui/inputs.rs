@@ -53,12 +53,7 @@ impl App {
                 self.tx.send(Request::Ingest).await?;
             }
             KeyCode::Up | KeyCode::Char('k') => self.scroll_up(3),
-            KeyCode::Down | KeyCode::Char('j') => {
-                // Need total height for clamping — estimate with a reasonable width
-                let viewport_h = self.last_viewport.1;
-                let total_h = Self::total_content_height(&self.messages, self.last_viewport.0);
-                self.scroll_down(3, viewport_h, total_h);
-            }
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(3),
             KeyCode::Char('q') => self.exit(),
             _ => {}
         }
@@ -84,15 +79,8 @@ impl App {
     pub async fn handle_logs_mode(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc => self.console_mode = ConsoleMode::Normal,
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(3);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let viewport_h = self.last_viewport.1;
-                let total_h = Self::total_content_height(&self.logs, self.last_viewport.0);
-                let max = total_h.saturating_sub(viewport_h);
-                self.log_scroll_offset = self.log_scroll_offset.saturating_add(3).min(max);
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(3),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(3),
             KeyCode::Char('q') => self.exit(),
             _ => {}
         }

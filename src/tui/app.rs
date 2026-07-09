@@ -94,15 +94,35 @@ impl App {
     }
 
     pub fn scroll_up(&mut self, lines: u16) {
-        self.chat_scroll_offset = self.chat_scroll_offset.saturating_sub(lines);
-        self.follow_output = false;
+        let offset = self.active_scroll_offset_mut();
+        *offset = offset.saturating_sub(lines);
+        if matches!(self.console_mode, ConsoleMode::Normal | ConsoleMode::Editing) {
+            self.follow_output = false;
+        }
     }
 
-    pub fn scroll_down(&mut self, lines: u16, viewport_height: u16, total_height: u16) {
-        let max_scroll = total_height.saturating_sub(viewport_height);
-        self.chat_scroll_offset = self.chat_scroll_offset.saturating_add(lines).min(max_scroll);
-        if self.chat_scroll_offset >= max_scroll {
+    pub fn scroll_down(&mut self, lines: u16) {
+        let (viewport_h, viewport_w) = self.last_viewport;
+        let entries = match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Editing => &self.messages,
+            ConsoleMode::Logs => &self.logs,
+        };
+        let total_h = Self::total_content_height(entries, viewport_w);
+        let max_scroll = total_h.saturating_sub(viewport_h);
+
+        let offset = self.active_scroll_offset_mut();
+        *offset = offset.saturating_add(lines).min(max_scroll);
+        let at_bottom = *offset >= max_scroll;
+
+        if matches!(self.console_mode, ConsoleMode::Normal | ConsoleMode::Editing) && at_bottom {
             self.follow_output = true;
+        }
+    }
+
+    fn active_scroll_offset_mut(&mut self) -> &mut u16 {
+        match self.console_mode {
+            ConsoleMode::Normal | ConsoleMode::Editing => &mut self.chat_scroll_offset,
+            ConsoleMode::Logs => &mut self.log_scroll_offset,
         }
     }
 
@@ -190,7 +210,7 @@ impl App {
                     }
                     Response::ContextFound(contexts) => {
                         for (score, preview) in &contexts {
-                            self.messages.push(ChatEntry::new(
+                            self.logs.push(ChatEntry::new(
                                 format!("kb: score {:.2}", score),
                                 preview.clone(),
                             ));
