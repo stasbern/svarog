@@ -26,7 +26,7 @@ impl ChatEntry {
 
 pub struct App {
     pub theme: crate::tui::theme::Theme,
-
+    
     pub input_mode: InputMode,
     pub input: String,
     pub messages: Vec<ChatEntry>,
@@ -39,11 +39,8 @@ pub struct App {
     
 
     exit: bool,
-    tx: mpsc::Sender<Request>,
-    rx: mpsc::Receiver<Response>,
-    pub(crate) knowledge: Arc<KnowledgeBase>,
-    pub(crate) status_tx: mpsc::Sender<String>,
-    status_rx: mpsc::Receiver<String>,
+    pub tx: mpsc::Sender<Request>,
+    pub rx: mpsc::Receiver<Response>,
 }
 
 impl App {
@@ -67,9 +64,6 @@ impl App {
             exit: false,
             tx,
             rx,
-            knowledge,
-            status_tx,
-            status_rx,
         }
     }
 
@@ -189,9 +183,9 @@ impl App {
                 .wrap_err("handle events failed")?;
             while let Ok(resp) = self.rx.try_recv() {
                 match resp {
-                    Response::CompleteResponse(msg) => self
-                        .messages
-                        .push(ChatEntry::new("svarog".to_string(), msg)),
+                    Response::CompleteResponse(msg) => {
+                        self.messages.push(ChatEntry::new("svarog".into(), msg));
+                    }
                     Response::ContextFound(contexts) => {
                         for (score, preview) in &contexts {
                             self.messages.push(ChatEntry::new(
@@ -200,14 +194,16 @@ impl App {
                             ));
                         }
                     }
-                    _ => {}
+                    Response::Status(status) => {
+                        if status.contains("complete") || status.contains("failed") {
+                            self.ingesting = false;
+                        }
+                        self.status_line = status;
+                    }
+                    Response::Error(e) => {
+                        self.status_line = format!("Error: {e}");
+                    }
                 }
-            }
-            while let Ok(status) = self.status_rx.try_recv() {
-                if status.contains("complete") || status.contains("failed") {
-                    self.ingesting = false;
-                }
-                self.status_line = status;
             }
         }
         Ok(())

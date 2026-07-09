@@ -5,7 +5,7 @@ use tokio::fs;
 use color_eyre::Result;
 use rig::client::EmbeddingsClient;
 use rig::providers::ollama;
-use rig::surrealdb::SurrealVectorStore;
+use rig::surrealdb::{SurrealVectorStore, SurrealDistanceFunction};
 use rig::vector_store::{InsertDocuments, VectorSearchRequest, VectorStoreIndexDyn};
 use rig::{Embed, embeddings::EmbeddingsBuilder};
 
@@ -13,6 +13,8 @@ use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
 use sha2::{Sha256, Digest};
+
+use super::knowledge_source::Namespace;
 
 #[derive(Embed, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 struct Chunk {
@@ -26,6 +28,7 @@ pub struct SearchResult {
     pub score: f64,
     pub id: String,
     pub content: String,
+    pub namespace: Namespace,
 }
 
 pub struct KnowledgeBase {
@@ -46,30 +49,26 @@ impl KnowledgeBase {
         })
     }
 
-    pub async fn ingest_directory(&self, dir: &Path) -> Result<()> {
-        let mut chunks: Vec<Chunk> = vec![];
-
+    pub async fn ingest_directory(&self, dir: &Path, ns: Namespace) -> Result<()> {
         if let Ok(mut entries) = fs::read_dir(&dir).await {
             while let Some(entry) = entries.next_entry().await? {
                 let Ok(text) = fs::read_to_string(entry.path()).await else {
                     continue;
                 };
 
-                // Normalize path: forward slashes
                 let normalized_path = entry.path().to_string_lossy().replace('\\', "/");
                 let hash = Self::hash_content(&text);
 
-                // Skip unchanged files
-                if let Ok(Some(stored_hash)) = self.get_stored_hash(&normalized_path).await {
+                // Skip unchanged files (check within this namespace)
+                if let Ok(Some(stored_hash)) = self.get_stored_hash(&normalized_path, ns).await {
                     if stored_hash == hash {
                         continue;
                     }
                 }
 
-                // File is new or changed — remove old chunks
-                self.delete_chunks_for_file(&normalized_path).await?;
+                self.delete_chunks_for_file(&normalized_path, ns).await?;
 
-                // Build new chunks with overlap
+                let mut chunks: Vec<Chunk> = vec![];
                 for (idx, chunk_text) in super::chunking::chunk_input(&text, 400, 80).iter().enumerate() {
                     chunks.push(Chunk {
                         chunk_index: idx,
@@ -78,31 +77,32 @@ impl KnowledgeBase {
                     });
                 }
 
-                // Update stored hash
-                self.store_hash(&normalized_path, &hash).await?;
+                if !chunks.is_empty() {
+                    let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+                    for chunk in chunks {
+                        builder = builder.document(chunk)?;
+                    }
+                    let embeddings = builder.build().await?;
+                    self.vector_store_for(ns).insert_documents(embeddings).await?;
+                }
+
+                self.store_hash(&normalized_path, &hash, ns).await?;
             }
         }
-
-        if chunks.is_empty() {
-            return Ok(());
-        }
-
-        let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
-        for chunk in chunks {
-            builder = builder.document(chunk)?;
-        }
-        let embeddings = builder.build().await?;
-        self.vector_store().insert_documents(embeddings).await?;
 
         Ok(())
     }
 
-    pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
-        SurrealVectorStore::with_defaults(self.embedding_model.clone(), self.db.clone())
+    pub fn vector_store_for(&self, ns: Namespace) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
+        SurrealVectorStore::new(self.embedding_model.clone(), self.db.clone(), Some((ns.table_name().to_string())), SurrealDistanceFunction::Cosine)
     }
 
-    pub async fn search(&self, query: &str, top_k: u64) -> Result<Vec<SearchResult>> {
-        let store = self.vector_store();
+    pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
+        self.vector_store_for(Namespace::Factual) // default to factual for general search
+    }
+
+    pub async fn search_namespace(&self, query: &str, ns: Namespace, top_k: u64) -> Result<Vec<SearchResult>> {
+        let store = self.vector_store_for(ns);
         let req = VectorSearchRequest::builder()
             .query(query)
             .samples(top_k)
@@ -128,10 +128,22 @@ impl KnowledgeBase {
                         .unwrap_or("")
                         .to_string()
                 };
-
-                SearchResult { score, id, content }
+                SearchResult { score, id, content, namespace: ns }
             })
             .collect())
+    }
+
+    pub async fn search_multi(&self, query: &str, namespaces: &[Namespace], top_k: u64) -> Result<Vec<SearchResult>> {
+        let mut all = Vec::new();
+        for &ns in namespaces {
+            match self.search_namespace(query, ns, top_k).await {
+                Ok(mut results) => all.append(&mut results),
+                Err(e) => eprintln!("search {} failed: {e}", ns),
+            }
+        }
+        all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all.truncate(top_k as usize);
+        Ok(all)
     }
 
     fn hash_content(content: &str) -> String {
@@ -139,42 +151,38 @@ impl KnowledgeBase {
         result.iter().map(|b| format!("{:02x}", b)).collect()
     }
     
-    async fn get_stored_hash(&self, file_path: &str) -> Result<Option<String>> {
-        let mut result = self
-            .db
-            .query("SELECT content_hash FROM file_hashes WHERE file_path = $path LIMIT 1")
+    async fn get_stored_hash(&self, file_path: &str, ns: Namespace) -> Result<Option<String>> {
+        let mut result = self.db
+            .query("SELECT VALUE content_hash FROM file_hashes WHERE file_path = $path AND namespace = $ns LIMIT 1")
             .bind(("path", file_path))
+            .bind(("ns", ns.to_string()))
             .await?;
-
         let hash: Option<String> = result.take(0)?;
         Ok(hash)
     }
 
-    async fn store_hash(&self, file_path: &str, hash: &str) -> Result<()> {
-        // Delete any existing record for this path, then create new one
+    async fn store_hash(&self, file_path: &str, hash: &str, ns: Namespace) -> Result<()> {
         self.db
-            .query("DELETE FROM file_hashes WHERE file_path = $path")
+            .query("DELETE FROM file_hashes WHERE file_path = $path AND namespace = $ns")
             .bind(("path", file_path))
+            .bind(("ns", ns.to_string()))
             .await?;
-
         self.db
-            .query("CREATE file_hashes SET file_path = $path, content_hash = $hash")
+            .query("CREATE file_hashes SET file_path = $path, content_hash = $hash, namespace = $ns")
             .bind(("path", file_path))
             .bind(("hash", hash))
+            .bind(("ns", ns.to_string()))
             .await?;
-
         Ok(())
     }
 
-    async fn delete_chunks_for_file(&self, file_path: &str) -> Result<()> {
-        // rig stores the serialized Chunk as a JSON string in the `document` column.
-        // We match on the "file_path":"..." fragment inside that JSON string.
+    async fn delete_chunks_for_file(&self, file_path: &str, ns: Namespace) -> Result<()> {
         let needle = format!("\"file_path\":\"{}\"", file_path);
-        self.db
-            .query("DELETE FROM documents WHERE string::contains(document, $needle)")
-            .bind(("needle", needle))
-            .await?;
-
+        let query = format!(
+            "DELETE FROM {} WHERE string::contains(document, $needle)",
+            ns.table_name()
+        );
+        self.db.query(&query).bind(("needle", needle)).await?;
         Ok(())
     }
 }

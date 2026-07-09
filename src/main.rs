@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     let knowledge =
         Arc::new(KnowledgeBase::new(client.inner(), &env::var("OLLAMA_EMBEDDING_MODEL")?).await?);
 
-    client.handle_completion(knowledge.clone(), channels.prompt_rx, channels.response_tx);
+    client.handle_requests(knowledge.clone(), channels.prompt_rx, channels.response_tx);
 
     // initialize tui with channels
     let mut terminal = ratatui::init();

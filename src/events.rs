@@ -4,15 +4,14 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub enum Request {
     Prompt(String),
+    Ingest,
 }
 
 #[derive(Debug, Clone)]
 pub enum Response {
-    // TODO: streaming
-    Token(String),
     CompleteResponse(String),
     ContextFound(Vec<(f64, String)>),
-    // not used yet
+    Status(String),
     Error(String),
 }
 

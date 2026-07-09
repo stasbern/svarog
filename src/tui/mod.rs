@@ -1,4 +1,4 @@
 pub mod app;
-pub mod events;
+pub mod inputs;
 pub mod renderer;
 pub mod theme;

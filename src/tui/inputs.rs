@@ -4,9 +4,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
-use std::path::PathBuf;
-
 use crate::tui::app::*;
+use crate::events::*;
 
 impl App {
     pub async fn handle_events(&mut self, event_stream: &mut EventStream) -> Result<()> {
@@ -47,18 +46,7 @@ impl App {
             KeyCode::Char('i') if !self.ingesting => {
                 self.ingesting = true;
                 self.status_line = "Ingesting documents...".into();
-                let kb = self.knowledge.clone();
-                let status = self.status_tx.clone();
-                tokio::spawn(async move {
-                    match kb.ingest_directory(&PathBuf::from("./input")).await {
-                        Ok(()) => {
-                            let _ = status.send("Ingestion complete".into()).await;
-                        }
-                        Err(e) => {
-                            let _ = status.send(format!("Ingestion failed: {e}")).await;
-                        }
-                    }
-                });
+                self.tx.send(Request::Ingest).await?;
             }
             KeyCode::Up | KeyCode::Char('k') => self.scroll_up(3),
             KeyCode::Down | KeyCode::Char('j') => {
