@@ -124,7 +124,7 @@ impl KnowledgeBase {
     pub async fn search_namespace(&self, query: &str, ns: Namespace, top_k: u64) -> Result<Vec<SearchResult>> {
         let store = self.vector_store_for(ns);
         let req = VectorSearchRequest::builder()
-            .query(query)
+            .query(format!("query: {query}"))
             .samples(top_k)
             .build();
 
