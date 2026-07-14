@@ -73,13 +73,14 @@ impl OllamaClient {
                             .await
                         {
                             Ok(results) => {
-                                let filtered: Vec<_> = results.into_iter()
-                                    .filter(|r| r.score > 0.25)
-                                    .collect();
+                                let filtered: Vec<_> =
+                                    results.into_iter().filter(|r| r.score >= 0.1).collect();
                                 if !filtered.is_empty() {
-                                    let info: Vec<(f64, String)> = filtered.iter()
+                                    let info: Vec<(f64, String)> = filtered
+                                        .iter()
                                         .map(|r| {
-                                            let preview = r.content.chars().take(120).collect::<String>();
+                                            let preview =
+                                                r.content.chars().take(120).collect::<String>();
                                             (r.score, format!("[{}] {}", r.namespace, preview))
                                         })
                                         .collect();
@@ -89,7 +90,10 @@ impl OllamaClient {
                             }
                             Err(e) => {
                                 let _ = response_tx
-                                    .send(Response::ContextFound(vec![(0.0, format!("KB error: {e}"))]))
+                                    .send(Response::ContextFound(vec![(
+                                        0.0,
+                                        format!("KB error: {e}"),
+                                    )]))
                                     .await;
                                 vec![]
                             }
@@ -99,7 +103,8 @@ impl OllamaClient {
                         let final_prompt = if relevant.is_empty() {
                             prompt
                         } else {
-                            let ctx = relevant.iter()
+                            let ctx = relevant
+                                .iter()
                                 .map(|r| r.content.as_str())
                                 .collect::<Vec<_>>()
                                 .join("\n---\n");
@@ -122,7 +127,8 @@ impl OllamaClient {
                         match tokio::fs::read_dir(&dir).await {
                             Ok(mut entries) => {
                                 while let Ok(Some(entry)) = entries.next_entry().await {
-                                    let Ok(text) = tokio::fs::read_to_string(entry.path()).await else {
+                                    let Ok(text) = tokio::fs::read_to_string(entry.path()).await
+                                    else {
                                         continue;
                                     };
                                     let fname = entry.file_name().to_string_lossy().to_string();
@@ -132,9 +138,11 @@ impl OllamaClient {
                                     // Skip unchanged files
                                     if let Some((_, stored_hash)) = stored_hashes.get(&path) {
                                         if *stored_hash == hash {
-                                            let _ = response_tx.send(Response::Status(
-                                                format!("{fname} unchanged, skipping")
-                                            )).await;
+                                            let _ = response_tx
+                                                .send(Response::Status(format!(
+                                                    "{fname} unchanged, skipping"
+                                                )))
+                                                .await;
                                             continue;
                                         }
                                     }
@@ -146,30 +154,36 @@ impl OllamaClient {
                                         Err(_) => Namespace::Factual,
                                     };
 
-                                    let _ = response_tx.send(Response::Status(
-                                        format!("{fname} → {ns}")
-                                    )).await;
+                                    let _ = response_tx
+                                        .send(Response::Status(format!("{fname} → {ns}")))
+                                        .await;
 
                                     // Clean old namespace if it changed
                                     if let Some((old_ns_str, _)) = stored_hashes.get(&path) {
                                         let old_ns = Namespace::parse(old_ns_str);
                                         if old_ns != ns {
-                                            let _ = knowledge.delete_chunks_for_file(&path, old_ns).await;
+                                            let _ = knowledge
+                                                .delete_chunks_for_file(&path, old_ns)
+                                                .await;
                                         }
                                     }
 
                                     if let Err(e) = knowledge.ingest_file(&path, &text, ns).await {
-                                        let _ = response_tx.send(Response::Status(
-                                            format!("Failed {fname}: {e}")
-                                        )).await;
+                                        let _ = response_tx
+                                            .send(Response::Status(format!("Failed {fname}: {e}")))
+                                            .await;
                                     }
                                 }
-                                let _ = response_tx.send(Response::Status("Ingestion complete".into())).await;
+                                let _ = response_tx
+                                    .send(Response::Status("Ingestion complete".into()))
+                                    .await;
                             }
                             Err(e) => {
-                                let _ = response_tx.send(Response::Status(
-                                    format!("Failed to read input dir: {e}")
-                                )).await;
+                                let _ = response_tx
+                                    .send(Response::Status(format!(
+                                        "Failed to read input dir: {e}"
+                                    )))
+                                    .await;
                             }
                         }
                     }

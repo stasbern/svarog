@@ -31,16 +31,26 @@ impl App {
         match self.console_mode {
             ConsoleMode::Normal | ConsoleMode::Editing => {
                 Self::render_entries(
-                    frame, &self.messages, &mut self.chat_scroll_offset,
-                    self.follow_output, content_area, "Messages",
-                    &self.theme, &mut self.last_viewport,
+                    frame,
+                    &self.messages,
+                    &mut self.chat_scroll_offset,
+                    self.follow_output,
+                    content_area,
+                    "Messages",
+                    &self.theme,
+                    &mut self.last_viewport,
                 );
             }
             ConsoleMode::Logs => {
                 Self::render_entries(
-                    frame, &self.logs, &mut self.log_scroll_offset,
-                    self.follow_logs, content_area, "Logs",
-                    &self.theme, &mut self.last_viewport,
+                    frame,
+                    &self.logs,
+                    &mut self.log_scroll_offset,
+                    self.follow_logs,
+                    content_area,
+                    "Logs",
+                    &self.theme,
+                    &mut self.last_viewport,
                 );
             }
         }
@@ -84,19 +94,29 @@ impl App {
             let msg_top = cumulative_y;
             cumulative_y += msg_h;
 
-            if cumulative_y <= *scroll_offset { continue; }
-            if msg_top >= *scroll_offset + inner.height { break; }
+            if cumulative_y <= *scroll_offset {
+                continue;
+            }
+            if msg_top >= *scroll_offset + inner.height {
+                break;
+            }
 
             let hidden_top = scroll_offset.saturating_sub(msg_top);
             let viewport_y = msg_top.saturating_sub(*scroll_offset);
             let visible_h = (msg_h - hidden_top).min(inner.height.saturating_sub(viewport_y));
-            if visible_h == 0 { continue; }
+            if visible_h == 0 {
+                continue;
+            }
 
             let rect = Rect::new(inner.x, inner.y + viewport_y, inner.width, visible_h);
 
             let (border_color, border_type, label) = match msg.sender.as_str() {
                 "user" => (theme.user_border, BorderType::Rounded, " you ".into()),
-                "svarog" => (theme.assistant_border, BorderType::Rounded, " svarog ".into()),
+                "svarog" => (
+                    theme.assistant_border,
+                    BorderType::Rounded,
+                    " svarog ".into(),
+                ),
                 s if s.starts_with("kb:") => (theme.kb_border, BorderType::Plain, format!(" {s} ")),
                 "error" => (theme.status_busy, BorderType::Double, " error ".into()),
                 "status" => (theme.status_ok, BorderType::Plain, " status ".into()),
@@ -121,7 +141,9 @@ impl App {
         let title = Line::from(" svarog ".bold());
         let input_style = match self.console_mode {
             ConsoleMode::Normal | ConsoleMode::Logs => Style::default(),
-            ConsoleMode::Editing if self.ingesting => Style::default().fg(self.theme.input_disabled),
+            ConsoleMode::Editing if self.ingesting => {
+                Style::default().fg(self.theme.input_disabled)
+            }
             ConsoleMode::Editing => Style::default().fg(self.theme.input_active),
         };
 
@@ -193,23 +215,35 @@ impl App {
 
         if self.ingesting {
             spans.push(" ⟳ ".into());
-            spans.push(Span::styled(&self.status_line, Style::default().fg(self.theme.status_busy)));
+            spans.push(Span::styled(
+                &self.status_line,
+                Style::default().fg(self.theme.status_busy),
+            ));
             spans.push("  ".into());
         } else if !self.status_line.is_empty() {
-            spans.push(Span::styled(&self.status_line, Style::default().fg(self.theme.status_ok)));
+            spans.push(Span::styled(
+                &self.status_line,
+                Style::default().fg(self.theme.status_ok),
+            ));
             spans.push("  ".into());
         }
 
-        let accent = |s: &'static str| Span::styled(s, Style::default().fg(self.theme.accent).bold());
+        let accent =
+            |s: &'static str| Span::styled(s, Style::default().fg(self.theme.accent).bold());
 
         match self.console_mode {
             ConsoleMode::Normal => {
                 spans.extend([
-                    " Edit ".into(), accent("<E>"),
-                    " Ingest ".into(), accent("<I>"),
-                    " Logs ".into(), accent("<L>"),
-                    " Scroll ".into(), accent("<↑/↓>"),
-                    " Quit ".into(), accent("<Q>"),
+                    " Edit ".into(),
+                    accent("<E>"),
+                    " Ingest ".into(),
+                    accent("<I>"),
+                    " Logs ".into(),
+                    accent("<L>"),
+                    " Scroll ".into(),
+                    accent("<↑/↓>"),
+                    " Quit ".into(),
+                    accent("<Q>"),
                 ]);
             }
             ConsoleMode::Editing => {
@@ -217,9 +251,12 @@ impl App {
             }
             ConsoleMode::Logs => {
                 spans.extend([
-                    " Back ".into(), accent("<Esc>"),
-                    " Scroll ".into(), accent("<↑/↓>"),
-                    " Quit ".into(), accent("<Q>"),
+                    " Back ".into(),
+                    accent("<Esc>"),
+                    " Scroll ".into(),
+                    accent("<↑/↓>"),
+                    " Quit ".into(),
+                    accent("<Q>"),
                 ]);
             }
         }

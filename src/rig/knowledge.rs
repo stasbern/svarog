@@ -1,19 +1,19 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 use tokio::fs;
 
 use color_eyre::Result;
 use rig::client::EmbeddingsClient;
 use rig::providers::ollama;
-use rig::surrealdb::{SurrealVectorStore, SurrealDistanceFunction};
+use rig::surrealdb::{SurrealDistanceFunction, SurrealVectorStore};
 use rig::vector_store::{InsertDocuments, VectorSearchRequest, VectorStoreIndexDyn};
 use rig::{Embed, embeddings::EmbeddingsBuilder};
 
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 use super::knowledge_source::Namespace;
 
@@ -51,7 +51,8 @@ impl KnowledgeBase {
     }
 
     pub async fn get_all_hashes(&self) -> Result<HashMap<String, (String, String)>> {
-        let mut result = self.db
+        let mut result = self
+            .db
             .query("SELECT VALUE [file_path, namespace, content_hash] FROM file_hashes")
             .await?;
         let rows: Vec<(String, String, String)> = result.take(0)?;
@@ -65,14 +66,13 @@ impl KnowledgeBase {
     pub async fn ingest_file(&self, path: &str, text: &str, ns: Namespace) -> Result<()> {
         self.delete_chunks_for_file(path, ns).await?;
 
-        let filename = path.rsplit('/').next().unwrap_or(path);
         let chunks: Vec<Chunk> = super::chunking::chunk_input(text, 400, 80)
             .into_iter()
             .enumerate()
             .map(|(idx, chunk_text)| Chunk {
                 chunk_index: idx,
                 file_path: path.to_string(),
-                content: format!("Source: {filename}\n{chunk_text}"),
+                content: chunk_text,
             })
             .collect();
 
@@ -82,7 +82,9 @@ impl KnowledgeBase {
                 builder = builder.document(chunk)?;
             }
             let embeddings = builder.build().await?;
-            self.vector_store_for(ns).insert_documents(embeddings).await?;
+            self.vector_store_for(ns)
+                .insert_documents(embeddings)
+                .await?;
         }
 
         let hash = Self::hash_content(text);
@@ -113,15 +115,28 @@ impl KnowledgeBase {
         Ok(())
     }
 
-    pub fn vector_store_for(&self, ns: Namespace) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
-        SurrealVectorStore::new(self.embedding_model.clone(), self.db.clone(), Some(ns.table_name().to_string()), SurrealDistanceFunction::Cosine)
+    pub fn vector_store_for(
+        &self,
+        ns: Namespace,
+    ) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
+        SurrealVectorStore::new(
+            self.embedding_model.clone(),
+            self.db.clone(),
+            Some(ns.table_name().to_string()),
+            SurrealDistanceFunction::Cosine,
+        )
     }
 
     pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
         self.vector_store_for(Namespace::Factual) // default to factual for general search
     }
 
-    pub async fn search_namespace(&self, query: &str, ns: Namespace, top_k: u64) -> Result<Vec<SearchResult>> {
+    pub async fn search_namespace(
+        &self,
+        query: &str,
+        ns: Namespace,
+        top_k: u64,
+    ) -> Result<Vec<SearchResult>> {
         let store = self.vector_store_for(ns);
         let req = VectorSearchRequest::builder()
             .query(format!("query: {query}"))
