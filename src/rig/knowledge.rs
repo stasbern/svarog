@@ -62,8 +62,32 @@ impl KnowledgeBase {
             .collect())
     }
 
-    /// Ingest a single file: delete old chunks → chunk → embed → insert → store hash.
-    pub async fn ingest_file(&self, path: &str, text: &str, ns: Namespace) -> Result<()> {
+    /// Ingest text whose hash is derived from that text.
+    ///
+    /// Useful for generated text or callers that do not have the original bytes.
+    pub async fn ingest_file(
+        &self,
+        path: &str,
+        text: &str,
+        ns: Namespace,
+    ) -> Result<()> {
+        let content_hash = Self::hash_content(text);
+
+        self.ingest_file_with_hash(path, text, ns, &content_hash)
+            .await
+    }
+
+    /// Ingest extracted text while tracking the hash of the original source bytes.
+    ///
+    /// PDF extraction can change as the extraction implementation evolves, while
+    /// this hash continues to identify whether the original PDF itself changed.
+    pub async fn ingest_file_with_hash(
+        &self,
+        path: &str,
+        text: &str,
+        ns: Namespace,
+        source_hash: &str,
+    ) -> Result<()> {
         self.delete_chunks_for_file(path, ns).await?;
 
         let chunks: Vec<Chunk> = super::chunking::chunk_input(text, 400, 80)
@@ -78,17 +102,20 @@ impl KnowledgeBase {
 
         if !chunks.is_empty() {
             let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+
             for chunk in chunks {
                 builder = builder.document(chunk)?;
             }
+
             let embeddings = builder.build().await?;
+
             self.vector_store_for(ns)
                 .insert_documents(embeddings)
                 .await?;
         }
 
-        let hash = Self::hash_content(text);
-        self.store_hash(path, &hash, ns).await?;
+        self.store_hash(path, source_hash, ns).await?;
+
         Ok(())
     }
 

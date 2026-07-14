@@ -7,6 +7,7 @@ use rig::providers::ollama::{Client, CompletionModel};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use super::ingestion::extract_path;
 use super::knowledge::KnowledgeBase;
 use super::knowledge_source::Namespace;
 use crate::events::*;
@@ -122,22 +123,45 @@ impl OllamaClient {
                     }
                     Request::Ingest => {
                         let dir = std::path::PathBuf::from("./input");
-                        let stored_hashes = knowledge.get_all_hashes().await.unwrap_or_default();
+
+                        let stored_hashes = knowledge
+                            .get_all_hashes()
+                            .await
+                            .unwrap_or_default();
 
                         match tokio::fs::read_dir(&dir).await {
                             Ok(mut entries) => {
                                 while let Ok(Some(entry)) = entries.next_entry().await {
-                                    let Ok(text) = tokio::fs::read_to_string(entry.path()).await
-                                    else {
-                                        continue;
-                                    };
+                                    let entry_path = entry.path();
                                     let fname = entry.file_name().to_string_lossy().to_string();
-                                    let path = entry.path().to_string_lossy().replace('\\', "/");
-                                    let hash = KnowledgeBase::hash_content(&text);
 
-                                    // Skip unchanged files
+                                    let extracted = match extract_path(&entry_path).await {
+                                        Ok(Some(document)) => document,
+
+                                        Ok(None) => {
+                                            let _ = response_tx
+                                                .send(Response::Status(format!(
+                                                    "{fname}: unsupported file type, skipping"
+                                                )))
+                                                .await;
+                                            continue;
+                                        }
+
+                                        Err(error) => {
+                                            let _ = response_tx
+                                                .send(Response::Status(format!(
+                                                    "{fname}: extraction failed: {error}"
+                                                )))
+                                                .await;
+                                            continue;
+                                        }
+                                    };
+
+                                    let path = extracted.source_path.clone();
+
+                                    // Compare the original file bytes, not extracted text.
                                     if let Some((_, stored_hash)) = stored_hashes.get(&path) {
-                                        if *stored_hash == hash {
+                                        if *stored_hash == extracted.raw_hash {
                                             let _ = response_tx
                                                 .send(Response::Status(format!(
                                                     "{fname} unchanged, skipping"
@@ -147,41 +171,86 @@ impl OllamaClient {
                                         }
                                     }
 
-                                    // Classify via the single classifier agent
-                                    let preview: String = text.chars().take(800).collect();
+                                    let preview = extracted.preview(1_500);
+
                                     let ns = match classifier.prompt(&preview).await {
-                                        Ok(resp) => Namespace::parse(&resp),
+                                        Ok(response) => Namespace::parse(&response),
                                         Err(_) => Namespace::Factual,
                                     };
 
                                     let _ = response_tx
-                                        .send(Response::Status(format!("{fname} → {ns}")))
+                                        .send(Response::Status(format!(
+                                            "{} → {} pages → {}",
+                                            extracted.title,
+                                            extracted.page_count(),
+                                            ns
+                                        )))
                                         .await;
 
-                                    // Clean old namespace if it changed
+                                    // If classification changed, remove records from the old table.
                                     if let Some((old_ns_str, _)) = stored_hashes.get(&path) {
                                         let old_ns = Namespace::parse(old_ns_str);
+
                                         if old_ns != ns {
-                                            let _ = knowledge
+                                            if let Err(error) = knowledge
                                                 .delete_chunks_for_file(&path, old_ns)
-                                                .await;
+                                                .await
+                                            {
+                                                let _ = response_tx
+                                                    .send(Response::Status(format!(
+                                                        "{fname}: failed to remove old chunks: {error}"
+                                                    )))
+                                                    .await;
+                                                continue;
+                                            }
                                         }
                                     }
 
-                                    if let Err(e) = knowledge.ingest_file(&path, &text, ns).await {
+                                    let canonical_text = extracted.canonical_text();
+
+                                    if canonical_text.trim().is_empty() {
                                         let _ = response_tx
-                                            .send(Response::Status(format!("Failed {fname}: {e}")))
+                                            .send(Response::Status(format!(
+                                                "{fname}: no usable text after extraction"
+                                            )))
                                             .await;
+                                        continue;
                                     }
+
+                                    if let Err(error) = knowledge
+                                        .ingest_file_with_hash(
+                                            &path,
+                                            &canonical_text,
+                                            ns,
+                                            &extracted.raw_hash,
+                                        )
+                                        .await
+                                    {
+                                        let _ = response_tx
+                                            .send(Response::Status(format!(
+                                                "{fname}: ingestion failed: {error}"
+                                            )))
+                                            .await;
+                                        continue;
+                                    }
+
+                                    let _ = response_tx
+                                        .send(Response::Status(format!(
+                                            "{fname}: stored {} pages",
+                                            extracted.page_count()
+                                        )))
+                                        .await;
                                 }
+
                                 let _ = response_tx
                                     .send(Response::Status("Ingestion complete".into()))
                                     .await;
                             }
-                            Err(e) => {
+
+                            Err(error) => {
                                 let _ = response_tx
                                     .send(Response::Status(format!(
-                                        "Failed to read input dir: {e}"
+                                        "Failed to read input directory: {error}"
                                     )))
                                     .await;
                             }
