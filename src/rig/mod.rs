@@ -3,3 +3,4 @@ pub mod knowledge;
 pub mod knowledge_source;
 pub mod chunking;
 pub mod ingestion;
+pub mod document;

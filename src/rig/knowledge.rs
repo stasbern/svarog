@@ -8,14 +8,21 @@ use rig::client::EmbeddingsClient;
 use rig::providers::ollama;
 use rig::surrealdb::{SurrealDistanceFunction, SurrealVectorStore};
 use rig::vector_store::{InsertDocuments, VectorSearchRequest, VectorStoreIndexDyn};
-use rig::{Embed, embeddings::EmbeddingsBuilder};
-
+use rig::{
+    Embed,
+    embeddings::{EmbeddingModel, EmbeddingsBuilder},
+};
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
 use sha2::{Digest, Sha256};
 
 use super::knowledge_source::Namespace;
+use super::document::{
+    DocumentSearchResult,
+    KnowledgeDocument,
+    KnowledgeDocumentRow,
+};
 
 #[derive(Embed, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 struct Chunk {
@@ -34,6 +41,7 @@ pub struct SearchResult {
 
 pub struct KnowledgeBase {
     embedding_model: ollama::EmbeddingModel,
+    embedding_model_name: String,
     db: Surreal<Db>,
 }
 
@@ -46,6 +54,7 @@ impl KnowledgeBase {
 
         Ok(Self {
             embedding_model,
+            embedding_model_name: embedding_model_name.to_string(),
             db,
         })
     }
@@ -245,6 +254,162 @@ impl KnowledgeBase {
             ns.table_name()
         );
         self.db.query(&query).bind(("needle", needle)).await?;
+        Ok(())
+    }
+
+    /// Stores document metadata and its catalog embedding as native SurrealDB
+    /// fields rather than an opaque serialized vector-store document.
+    pub async fn upsert_document(&self, document: &KnowledgeDocument) -> Result<()> {
+        // Generate the embedding before deleting the prior record. If Ollama fails,
+        // the existing catalog record remains intact.
+        let embedding = self
+            .embedding_model
+            .embed_text(&document.descriptor_text)
+            .await?
+            .vec;
+
+        let descriptor_json = serde_json::to_string(&document.descriptor)?;
+
+        let mut response = self
+            .db
+            .query(
+                r#"
+                DELETE FROM knowledge_document
+                WHERE source_path = $source_path;
+
+                CREATE knowledge_document SET
+                    document_key = $document_key,
+                    source_path = $source_path,
+                    raw_hash = $raw_hash,
+                    media_type = $media_type,
+                    page_count = $page_count,
+                    namespace = $namespace,
+                    descriptor_json = $descriptor_json,
+                    descriptor_text = $descriptor_text,
+                    descriptor_model = $descriptor_model,
+                    descriptor_version = $descriptor_version,
+                    ingestion_version = $ingestion_version,
+                    embedding_model = $embedding_model,
+                    embedding = $embedding;
+                "#,
+            )
+            .bind(("document_key", document.document_key.clone()))
+            .bind(("source_path", document.source_path.clone()))
+            .bind(("raw_hash", document.raw_hash.clone()))
+            .bind(("media_type", document.media_type.clone()))
+            .bind(("page_count", document.page_count))
+            .bind(("namespace", document.namespace.to_string()))
+            .bind(("descriptor_json", descriptor_json))
+            .bind(("descriptor_text", document.descriptor_text.clone()))
+            .bind(("descriptor_model", document.descriptor_model.clone()))
+            .bind(("descriptor_version", document.descriptor_version.clone()))
+            .bind(("ingestion_version", document.ingestion_version.clone()))
+            .bind(("embedding_model", self.embedding_model_name.clone()))
+            .bind(("embedding", embedding))
+            .await?;
+
+        // Force SurrealDB to deserialize both statements so statement-level errors
+        // are not silently ignored.
+        let _: Vec<serde_json::Value> = response.take(0)?;
+        let _: Vec<serde_json::Value> = response.take(1)?;
+
+        Ok(())
+    }
+
+    /// Semantic search over document identity rather than passage contents.
+    ///
+    /// A brute-force cosine scan is acceptable while the document catalog is
+    /// small. An HNSW index can replace this without changing the API later.
+    pub async fn search_documents(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<DocumentSearchResult>> {
+        let embedding_query = format!("query: {query}");
+
+        let query_embedding = self
+            .embedding_model
+            .embed_text(&embedding_query)
+            .await?
+            .vec;
+
+        let mut response = self
+            .db
+            .query(
+                r#"
+                SELECT
+                    document_key,
+                    source_path,
+                    raw_hash,
+                    media_type,
+                    page_count,
+                    namespace,
+                    descriptor_json,
+                    descriptor_text,
+                    descriptor_model,
+                    descriptor_version,
+                    ingestion_version,
+                    vector::similarity::cosine($embedding, embedding) AS score
+                FROM knowledge_document
+                WHERE namespace != 'tmp'
+                ORDER BY score DESC
+                LIMIT $limit;
+                "#,
+            )
+            .bind(("embedding", query_embedding))
+            .bind(("limit", top_k))
+            .await?;
+
+        let rows: Vec<KnowledgeDocumentRow> = response.take(0)?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(KnowledgeDocumentRow::into_search_result)
+            .collect())
+    }
+
+    /// Deterministic inventory access for future commands such as `/documents`.
+    pub async fn list_documents(&self) -> Result<Vec<KnowledgeDocument>> {
+        let mut response = self
+            .db
+            .query(
+                r#"
+                SELECT
+                    document_key,
+                    source_path,
+                    raw_hash,
+                    media_type,
+                    page_count,
+                    namespace,
+                    descriptor_json,
+                    descriptor_text,
+                    descriptor_model,
+                    descriptor_version,
+                    ingestion_version,
+                    1.0 AS score
+                FROM knowledge_document
+                ORDER BY descriptor_text ASC;
+                "#,
+            )
+            .await?;
+
+        let rows: Vec<KnowledgeDocumentRow> = response.take(0)?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(KnowledgeDocumentRow::into_search_result)
+            .map(|result| result.document)
+            .collect())
+    }
+
+    pub async fn delete_document_for_file(&self, source_path: &str) -> Result<()> {
+        self.db
+            .query(
+                "DELETE FROM knowledge_document WHERE source_path = $source_path",
+            )
+            .bind(("source_path", source_path.to_string()))
+            .await?;
+
         Ok(())
     }
 }

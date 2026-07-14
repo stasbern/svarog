@@ -1,5 +1,7 @@
 // src/rig/ingestion.rs
 
+pub const INGESTION_VERSION: &str = "pdf-catalog-v1";
+
 use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
@@ -49,6 +51,49 @@ impl ExtractedDocument {
             .flat_map(|page| page.text.chars().chain(std::iter::once('\n')))
             .take(max_chars)
             .collect()
+    }
+
+    /// Produces a bounded sample for document identity extraction.
+    ///
+    /// This deliberately samples several beginning pages instead of only taking
+    /// the first N characters, because PDF cover pages are often nearly empty.
+    pub fn descriptor_source(&self, max_pages: usize, max_chars: usize) -> String {
+        let mut output = format!(
+            "Source filename: {}\nMedia type: {}\nTotal pages: {}\n\n",
+            self.title,
+            self.media_type,
+            self.page_count()
+        );
+
+        let mut included_pages = 0;
+
+        for page in self.pages.iter().filter(|page| !page.text.trim().is_empty()) {
+            if included_pages >= max_pages || output.chars().count() >= max_chars {
+                break;
+            }
+
+            output.push_str(&format!("\n--- Physical page {} ---\n", page.number));
+
+            let remaining = max_chars.saturating_sub(output.chars().count());
+
+            if remaining == 0 {
+                break;
+            }
+
+            output.extend(page.text.chars().take(remaining));
+            output.push('\n');
+
+            included_pages += 1;
+        }
+
+        output
+    }
+
+    /// Changes when extraction, descriptor generation, or chunking semantics change.
+    ///
+    /// The raw source hash still remains available separately.
+    pub fn pipeline_hash(&self) -> String {
+        format!("{INGESTION_VERSION}:{}", self.raw_hash)
     }
 
     pub fn page_count(&self) -> usize {

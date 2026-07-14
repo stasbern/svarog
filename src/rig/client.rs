@@ -7,9 +7,16 @@ use rig::providers::ollama::{Client, CompletionModel};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use super::ingestion::extract_path;
 use super::knowledge::KnowledgeBase;
 use super::knowledge_source::Namespace;
+use super::document::{
+    DocumentDescriptor,
+    KnowledgeDocument,
+};
+use super::ingestion::{
+    INGESTION_VERSION,
+    extract_path,
+};
 use crate::events::*;
 
 pub struct OllamaClient {
@@ -44,7 +51,7 @@ impl OllamaClient {
         &self.client
     }
 
-     pub async fn classify_text(&self, text: &str) -> Namespace {
+    pub async fn classify_text(&self, text: &str) -> Namespace {
         let classifier = self.agent_with(Namespace::classifier_prompt(), 0.0);
 
         let preview: String = text.chars().take(800).collect();
@@ -62,6 +69,9 @@ impl OllamaClient {
     ) {
         let agent = self.agent_with(&self.preamble, self.temperature);
         let classifier = self.agent_with(Namespace::classifier_prompt(), 0.0);
+        let descriptor_agent = self.agent_with(DocumentDescriptor::extractor_prompt(), 0.0);
+
+        let descriptor_model_name = self.model.clone();
 
         tokio::spawn(async move {
             let mut chat_history: Vec<Message> = vec![];
@@ -69,55 +79,129 @@ impl OllamaClient {
             while let Some(req) = prompt_rx.recv().await {
                 match req {
                     Request::Prompt(prompt) => {
+                        // First find documents whose identities match the question.
+                        let document_matches = knowledge
+                            .search_documents(&prompt, 3)
+                            .await
+                            .unwrap_or_default();
+
+                        if !document_matches.is_empty() {
+                            let info = document_matches
+                                .iter()
+                                .map(|result| {
+                                    (
+                                        result.score,
+                                        format!(
+                                            "[document] {} — {}",
+                                            result.document.descriptor.title,
+                                            result.document.descriptor.summary
+                                        ),
+                                    )
+                                })
+                                .collect();
+
+                            let _ = response_tx
+                                .send(Response::ContextFound(info))
+                                .await;
+                        }
+
+                        // Then retrieve precise passage evidence.
                         let relevant = match knowledge
-                            .search_multi(&prompt, Namespace::searchable(), 4)
+                            .search_multi(&prompt, Namespace::searchable(), 6)
                             .await
                         {
                             Ok(results) => {
-                                let filtered: Vec<_> =
-                                    results.into_iter().filter(|r| r.score >= 0.1).collect();
+                                let filtered: Vec<_> = results
+                                    .into_iter()
+                                    .filter(|result| result.score >= 0.1)
+                                    .collect();
+
                                 if !filtered.is_empty() {
-                                    let info: Vec<(f64, String)> = filtered
+                                    let info = filtered
                                         .iter()
-                                        .map(|r| {
-                                            let preview =
-                                                r.content.chars().take(120).collect::<String>();
-                                            (r.score, format!("[{}] {}", r.namespace, preview))
+                                        .map(|result| {
+                                            let preview = result
+                                                .content
+                                                .chars()
+                                                .take(120)
+                                                .collect::<String>();
+
+                                            (
+                                                result.score,
+                                                format!("[{}] {}", result.namespace, preview),
+                                            )
                                         })
                                         .collect();
-                                    let _ = response_tx.send(Response::ContextFound(info)).await;
+
+                                    let _ = response_tx
+                                        .send(Response::ContextFound(info))
+                                        .await;
                                 }
+
                                 filtered
                             }
-                            Err(e) => {
+
+                            Err(error) => {
                                 let _ = response_tx
                                     .send(Response::ContextFound(vec![(
                                         0.0,
-                                        format!("KB error: {e}"),
+                                        format!("KB error: {error}"),
                                     )]))
                                     .await;
+
                                 vec![]
                             }
                         };
 
-                        // Build prompt — inject context only if we found something
-                        let final_prompt = if relevant.is_empty() {
+                        let catalog_context = document_matches
+                            .iter()
+                            .map(|result| result.document.catalog_context())
+                            .collect::<Vec<_>>()
+                            .join("\n\n--- DOCUMENT ---\n\n");
+
+                        let evidence_context = relevant
+                            .iter()
+                            .map(|result| result.content.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n\n--- PASSAGE ---\n\n");
+
+                        let final_prompt = if catalog_context.is_empty()
+                            && evidence_context.is_empty()
+                        {
                             prompt
                         } else {
-                            let ctx = relevant
-                                .iter()
-                                .map(|r| r.content.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n---\n");
-                            format!("Relevant context:\n{ctx}\n\nUser: {prompt}")
+                            format!(
+                                r#"
+                    Knowledge catalog:
+                    {catalog_context}
+
+                    Retrieved source passages:
+                    {evidence_context}
+
+                    Instructions:
+                    - The catalog describes which documents and subjects are available.
+                    - The passages are source evidence from those documents.
+                    - For questions about what knowledge is available, answer primarily from the catalog.
+                    - For technical claims, rely on the source passages.
+                    - Do not claim that catalog metadata proves technical details not present in the passages.
+                    - If the available context is insufficient, say so.
+
+                    User: {prompt}
+                    "#
+                            )
                         };
 
                         match agent.chat(&final_prompt, &mut chat_history).await {
                             Ok(text) => {
-                                let _ = response_tx.send(Response::CompleteResponse(text)).await;
+                                let _ = response_tx
+                                    .send(Response::CompleteResponse(text))
+                                    .await;
                             }
-                            Err(e) => {
-                                let _ = response_tx.send(Response::Error(format!("{e:?}"))).await;
+
+                            Err(error) => {
+                                let _ = response_tx
+                                    .send(Response::Error(format!("{error:?}")))
+                                    .await;
                             }
                         }
                     }
@@ -158,10 +242,11 @@ impl OllamaClient {
                                     };
 
                                     let path = extracted.source_path.clone();
+                                    let pipeline_hash = extracted.pipeline_hash();
 
                                     // Compare the original file bytes, not extracted text.
                                     if let Some((_, stored_hash)) = stored_hashes.get(&path) {
-                                        if *stored_hash == extracted.raw_hash {
+                                        if *stored_hash == pipeline_hash {
                                             let _ = response_tx
                                                 .send(Response::Status(format!(
                                                     "{fname} unchanged, skipping"
@@ -178,12 +263,61 @@ impl OllamaClient {
                                         Err(_) => Namespace::Factual,
                                     };
 
+                                    let descriptor_input = extracted.descriptor_source(6, 16_000);
+
+                                    let descriptor = match descriptor_agent
+                                        .prompt(&descriptor_input)
+                                        .await
+                                    {
+                                        Ok(response) => {
+                                            match DocumentDescriptor::from_model_output(
+                                                &response,
+                                                &extracted.title,
+                                            ) {
+                                                Ok(descriptor) => descriptor,
+
+                                                Err(error) => {
+                                                    let _ = response_tx
+                                                        .send(Response::Status(format!(
+                                                            "{fname}: descriptor JSON was invalid ({error}); using fallback metadata"
+                                                        )))
+                                                        .await;
+
+                                                    DocumentDescriptor::fallback(&extracted.title)
+                                                }
+                                            }
+                                        }
+
+                                        Err(error) => {
+                                            let _ = response_tx
+                                                .send(Response::Status(format!(
+                                                    "{fname}: descriptor extraction failed ({error}); using fallback metadata"
+                                                )))
+                                                .await;
+
+                                            DocumentDescriptor::fallback(&extracted.title)
+                                        }
+                                    };
+
+                                    let knowledge_document = KnowledgeDocument::from_extracted(
+                                        &extracted,
+                                        ns,
+                                        descriptor,
+                                        descriptor_model_name.clone(),
+                                        INGESTION_VERSION,
+                                    );
+
                                     let _ = response_tx
                                         .send(Response::Status(format!(
-                                            "{} → {} pages → {}",
-                                            extracted.title,
+                                            "{} → {} pages → {} → {}",
+                                            knowledge_document.descriptor.title,
                                             extracted.page_count(),
-                                            ns
+                                            ns,
+                                            knowledge_document
+                                                .descriptor
+                                                .document_type
+                                                .as_deref()
+                                                .unwrap_or("document")
                                         )))
                                         .await;
 
@@ -218,11 +352,24 @@ impl OllamaClient {
                                     }
 
                                     if let Err(error) = knowledge
+                                        .upsert_document(&knowledge_document)
+                                        .await
+                                    {
+                                        let _ = response_tx
+                                            .send(Response::Status(format!(
+                                                "{fname}: failed to store document catalog metadata: {error}"
+                                            )))
+                                            .await;
+
+                                        continue;
+                                    }
+
+                                    if let Err(error) = knowledge
                                         .ingest_file_with_hash(
                                             &path,
                                             &canonical_text,
                                             ns,
-                                            &extracted.raw_hash,
+                                            &pipeline_hash,
                                         )
                                         .await
                                     {
