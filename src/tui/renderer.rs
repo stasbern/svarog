@@ -12,7 +12,8 @@ impl App {
     pub fn render(&mut self, frame: &mut Frame) {
         let inner_width = frame.area().width.saturating_sub(2) as usize;
         let input_lines = if inner_width > 0 {
-            (self.input.chars().count() / inner_width) + 1
+            let (display, _, _) = Self::word_wrap_input(&self.input, inner_width, 0);
+            display.chars().filter(|c| *c == '\n').count() + 1
         } else { 1 };
 
         let layout = Layout::vertical([
@@ -124,20 +125,66 @@ impl App {
             ConsoleMode::Editing => Style::default().fg(self.theme.input_active),
         };
 
-        let input = Paragraph::new(self.input.as_str())
-            .wrap(Wrap { trim: true })
+        let (display, cursor_line, cursor_col) = Self::word_wrap_input(&self.input, inner_width, self.char_index);
+
+        let input = Paragraph::new(display)
             .style(input_style)
             .block(Block::bordered().title(title.centered()));
         frame.render_widget(input, area);
 
         if matches!(self.console_mode, ConsoleMode::Editing) {
-            let cursor_line = if inner_width > 0 { self.char_index / inner_width } else { 0 };
-            let cursor_col = if inner_width > 0 { self.char_index % inner_width } else { 0 };
             frame.set_cursor_position(Position::new(
                 area.x + cursor_col as u16 + 1,
                 area.y + cursor_line as u16 + 1,
             ));
         }
+    }
+
+    fn word_wrap_input(text: &str, width: usize, char_index: usize) -> (String, usize, usize) {
+        if width == 0 || text.is_empty() {
+            return (text.to_string(), 0, char_index);
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut line_starts: Vec<usize> = vec![0];
+        let mut pos = 0;
+
+        while pos < chars.len() {
+            let remaining = chars.len() - pos;
+
+            if remaining <= width {
+                lines.push(chars[pos..].iter().collect());
+                break;
+            }
+
+            // Find last space within line width to break at
+            let slice = &chars[pos..pos + width];
+            let break_at = if let Some(last_space) = slice.iter().rposition(|c| *c == ' ') {
+                last_space + 1 // break after space
+            } else {
+                width // no space — force break
+            };
+
+            lines.push(chars[pos..pos + break_at].iter().collect());
+            pos += break_at;
+            line_starts.push(pos);
+        }
+
+        // Find cursor line and column
+        let mut cursor_line = lines.len().saturating_sub(1);
+        let mut cursor_col = char_index.saturating_sub(*line_starts.last().unwrap_or(&0));
+
+        for (i, &start) in line_starts.iter().enumerate() {
+            let end = if i + 1 < line_starts.len() { line_starts[i + 1] } else { chars.len() + 1 };
+            if char_index < end {
+                cursor_line = i;
+                cursor_col = char_index - start;
+                break;
+            }
+        }
+
+        (lines.join("\n"), cursor_line, cursor_col)
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {

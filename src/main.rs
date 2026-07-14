@@ -23,7 +23,13 @@ async fn main() -> Result<()> {
     let client = OllamaClient::new(
         &env::var("OLLAMA_BASE_MODEL")?,
         &env::var("BASE_MODEL_PREAMBLE")?,
-        0.1,
+        env::var("TEMPERATURE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7),
+        serde_json::json!({
+            "top_p": env::var("TOP_P").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.95),
+            "top_k": env::var("TOP_K").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(40),
+            "repeat_penalty": env::var("REPEAT_PENALTY").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0),
+            "num_ctx": env::var("NUM_CTX").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(8192),
+        }),
     );
 
     let knowledge =

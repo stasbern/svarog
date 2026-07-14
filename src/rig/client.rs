@@ -2,7 +2,7 @@ use color_eyre::Result;
 
 use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::{Chat, Message, Prompt};
-use rig::providers::ollama::Client;
+use rig::providers::ollama::{Client, CompletionModel};
 
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -16,16 +16,27 @@ pub struct OllamaClient {
     model: String,
     preamble: String,
     temperature: f64,
+    additional_params: serde_json::Value,
 }
 
 impl OllamaClient {
-    pub fn new(model: &str, preamble: &str, temperature: f64) -> Self {
+    pub fn new(model: &str, preamble: &str, temperature: f64, additional_params: serde_json::Value) -> Self {
         Self {
             client: Client::from_env().expect("Failed to connect to Ollama — is OLLAMA_HOST set?"),
             model: String::from(model),
             preamble: String::from(preamble),
             temperature,
+            additional_params,
         }
+    }
+
+    fn agent_with(&self, preamble: &str, temperature: f64) -> rig::agent::Agent<CompletionModel> {
+        self.client
+            .agent(&self.model)
+            .preamble(preamble)
+            .temperature(temperature)
+            .additional_params(self.additional_params.clone())
+            .build()
     }
 
     pub fn inner(&self) -> &Client {
@@ -33,11 +44,7 @@ impl OllamaClient {
     }
 
      pub async fn classify_text(&self, text: &str) -> Namespace {
-        let classifier = self.client
-            .agent(&self.model)
-            .preamble(Namespace::classifier_prompt())
-            .temperature(0.0)
-            .build();
+        let classifier = self.agent_with(Namespace::classifier_prompt(), 0.0);
 
         let preview: String = text.chars().take(800).collect();
         match classifier.prompt(&preview).await {
@@ -52,18 +59,10 @@ impl OllamaClient {
         mut prompt_rx: mpsc::Receiver<Request>,
         response_tx: mpsc::Sender<Response>,
     ) {
-        let client = self.client.clone();
-        let model = self.model.clone();
-        let preamble = self.preamble.clone();
-        let temperature = self.temperature;
+        let agent = self.agent_with(&self.preamble, self.temperature);
+        let classifier = self.agent_with(Namespace::classifier_prompt(), 0.0);
 
         tokio::spawn(async move {
-            let agent = client
-                .agent(&model)
-                .preamble(&preamble)
-                .temperature(temperature)
-                .build();
-
             let mut chat_history: Vec<Message> = vec![];
 
             while let Some(req) = prompt_rx.recv().await {
@@ -117,12 +116,6 @@ impl OllamaClient {
                         }
                     }
                     Request::Ingest => {
-                        let classifier = client
-                            .agent(&model)
-                            .preamble(Namespace::classifier_prompt())
-                            .temperature(0.0)
-                            .build();
-
                         let dir = std::path::PathBuf::from("./input");
                         let stored_hashes = knowledge.get_all_hashes().await.unwrap_or_default();
 
