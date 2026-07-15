@@ -125,16 +125,12 @@ impl IngestionService {
 
         self.report_document_identity(&knowledge_document).await;
 
-        if !self
-            .remove_old_namespace_chunks(&source_path, namespace, stored_hashes, file_name)
-            .await
-        {
-            return;
-        }
+        let has_usable_text = extracted
+            .pages
+            .iter()
+            .any(|page| !page.text.trim().is_empty());
 
-        let canonical_text = extracted.canonical_text();
-
-        if canonical_text.trim().is_empty() {
+        if !has_usable_text {
             self.status(format!("{file_name}: no usable text after extraction"))
                 .await;
 
@@ -148,16 +144,27 @@ impl IngestionService {
             return;
         }
 
-        if let Err(error) = self
+        let chunk_count = match self
             .knowledge
-            .ingest_file_with_hash(&source_path, &canonical_text, namespace, &pipeline_hash)
+            .replace_document_chunks(&knowledge_document, &extracted.pages, &pipeline_hash)
             .await
         {
-            self.status(format!("{file_name}: ingestion failed: {error}"))
-                .await;
+            Ok(chunk_count) => chunk_count,
 
-            return;
-        }
+            Err(error) => {
+                self.status(format!("{file_name}: chunk ingestion failed: {error}"))
+                    .await;
+
+                return;
+            }
+        };
+
+        self.status(format!(
+            "{file_name}: stored {} pages in {} chunks",
+            extracted.page_count(),
+            chunk_count,
+        ))
+        .await;
 
         self.status(format!(
             "{file_name}: stored {} pages",
@@ -207,42 +214,6 @@ impl IngestionService {
                 .await;
 
                 DocumentDescriptor::fallback(&extracted.title)
-            }
-        }
-    }
-
-    async fn remove_old_namespace_chunks(
-        &self,
-        source_path: &str,
-        namespace: Namespace,
-        stored_hashes: &StoredHashes,
-        file_name: &str,
-    ) -> bool {
-        let Some((old_namespace, _)) = stored_hashes.get(source_path) else {
-            return true;
-        };
-
-        let old_namespace = Namespace::parse(old_namespace);
-
-        if old_namespace == namespace {
-            return true;
-        }
-
-        match self
-            .knowledge
-            .delete_chunks_for_file(source_path, old_namespace)
-            .await
-        {
-            Ok(()) => true,
-
-            Err(error) => {
-                self.status(format!(
-                    "{file_name}: failed to remove old chunks: \
-                     {error}"
-                ))
-                .await;
-
-                false
             }
         }
     }

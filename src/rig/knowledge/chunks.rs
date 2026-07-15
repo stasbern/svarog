@@ -1,126 +1,184 @@
-// src/rig/knowledge/chunks.rs
-
-use std::path::Path;
-
 use color_eyre::Result;
-use rig::providers::ollama;
-use rig::surrealdb::{SurrealDistanceFunction, SurrealVectorStore};
-use rig::vector_store::{InsertDocuments, VectorSearchRequest, VectorStoreIndexDyn};
-use rig::{Embed, embeddings::EmbeddingsBuilder};
+use rig::{
+    Embed,
+    embeddings::{EmbeddingModel, EmbeddingsBuilder},
+};
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::Db;
-use tokio::fs;
+use surrealdb::types::{RecordId, SurrealValue, ToSql};
 
 use super::KnowledgeBase;
 use crate::rig::chunking::chunk_input;
+use crate::rig::document::KnowledgeDocument;
+use crate::rig::ingestion::ExtractedPage;
 use crate::rig::knowledge_source::Namespace;
 
-#[derive(Embed, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-struct Chunk {
+const CHUNK_MAX_CHARACTERS: usize = 1_800;
+const CHUNK_OVERLAP_CHARACTERS: usize = 250;
+
+/// Intermediate document given to Rig for embedding.
+#[derive(Debug, Serialize, Embed)]
+struct ChunkDraft {
+    id: RecordId,
+    document: RecordId,
+    document_key: String,
+    source_path: String,
+    document_title: String,
+    namespace: String,
     chunk_index: usize,
-    file_path: String,
+    page_start: usize,
+    page_end: usize,
+    content: String,
 
     #[embed]
+    embedding_text: String,
+}
+
+/// Native SurrealDB representation.
+#[derive(Debug, Serialize, SurrealValue)]
+struct StoredChunk {
+    id: RecordId,
+    document: RecordId,
+    document_key: String,
+    source_path: String,
+    document_title: String,
+    namespace: String,
+    chunk_index: usize,
+    page_start: usize,
+    page_end: usize,
     content: String,
+    embedding_text: String,
+    embedding: Vec<f64>,
+}
+
+/// Projection returned by native vector search.
+#[derive(Debug, Deserialize, SurrealValue)]
+struct ChunkSearchRow {
+    id: RecordId,
+    document: RecordId,
+    document_key: String,
+    document_title: String,
+    namespace: String,
+    chunk_index: usize,
+    page_start: usize,
+    page_end: usize,
+    content: String,
+    score: f64,
 }
 
 pub struct SearchResult {
     pub score: f64,
     pub id: String,
+    pub document_id: String,
+    pub document_key: String,
+    pub document_title: String,
     pub content: String,
     pub namespace: Namespace,
+    pub chunk_index: usize,
+    pub page_start: usize,
+    pub page_end: usize,
+}
+
+impl SearchResult {
+    pub fn source_label(&self) -> String {
+        if self.page_start == self.page_end {
+            format!("{}, page {}", self.document_title, self.page_start,)
+        } else {
+            format!(
+                "{}, pages {}–{}",
+                self.document_title, self.page_start, self.page_end,
+            )
+        }
+    }
 }
 
 impl KnowledgeBase {
-    /// Ingests generated text whose hash is derived from the text.
-    pub async fn ingest_file(&self, path: &str, text: &str, namespace: Namespace) -> Result<()> {
-        let content_hash = Self::hash_content(text);
+    /// Replaces every persisted chunk belonging to one document.
+    pub async fn replace_document_chunks(
+        &self,
+        document: &KnowledgeDocument,
+        pages: &[ExtractedPage],
+        pipeline_hash: &str,
+    ) -> Result<usize> {
+        let drafts = create_chunk_drafts(document, pages);
 
-        self.ingest_file_with_hash(path, text, namespace, &content_hash)
-            .await
+        if drafts.is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "document produced no non-empty chunks"
+            ));
+        }
+
+        let records = self.embed_chunk_drafts(drafts).await?;
+
+        let chunk_count = records.len();
+
+        self.replace_stored_chunks(document, records).await?;
+
+        self.store_hash(&document.source_path, pipeline_hash, document.namespace)
+            .await?;
+
+        Ok(chunk_count)
     }
 
-    /// Ingests extracted text while storing a caller-provided source
-    /// or pipeline hash.
-    pub async fn ingest_file_with_hash(
+    async fn embed_chunk_drafts(&self, drafts: Vec<ChunkDraft>) -> Result<Vec<StoredChunk>> {
+        let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+
+        for draft in drafts {
+            builder = builder.document(draft)?;
+        }
+
+        let embedded_documents = builder.build().await?;
+
+        let mut records = Vec::new();
+
+        for (draft, embeddings) in embedded_documents {
+            // `ChunkDraft` has exactly one #[embed] field, so this
+            // normally produces exactly one embedding.
+            for embedding in embeddings {
+                records.push(StoredChunk {
+                    id: draft.id.clone(),
+                    document: draft.document.clone(),
+                    document_key: draft.document_key.clone(),
+                    source_path: draft.source_path.clone(),
+                    document_title: draft.document_title.clone(),
+                    namespace: draft.namespace.clone(),
+                    chunk_index: draft.chunk_index,
+                    page_start: draft.page_start,
+                    page_end: draft.page_end,
+                    content: draft.content.clone(),
+                    embedding_text: embedding.document,
+                    embedding: embedding.vec,
+                });
+            }
+        }
+
+        Ok(records)
+    }
+
+    async fn replace_stored_chunks(
         &self,
-        path: &str,
-        text: &str,
-        namespace: Namespace,
-        source_hash: &str,
+        document: &KnowledgeDocument,
+        records: Vec<StoredChunk>,
     ) -> Result<()> {
-        self.delete_chunks_for_file(path, namespace).await?;
+        let document_id = RecordId::new("knowledge_document", document.document_key.clone());
 
-        let chunks = create_chunks(path, text);
+        let mut delete_response = self
+            .db
+            .query(
+                r#"
+                DELETE FROM knowledge_chunk
+                WHERE document = $document;
+                "#,
+            )
+            .bind(("document", document_id))
+            .await?;
 
-        if !chunks.is_empty() {
-            let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+        let _: Vec<serde_json::Value> = delete_response.take(0)?;
 
-            for chunk in chunks {
-                builder = builder.document(chunk)?;
-            }
-
-            let embeddings = builder.build().await?;
-
-            self.vector_store_for(namespace)
-                .insert_documents(embeddings)
-                .await?;
-        }
-
-        self.store_hash(path, source_hash, namespace).await?;
-
-        Ok(())
-    }
-
-    /// Legacy text-directory ingestion helper.
-    ///
-    /// The newer ingestion service should be preferred for PDF and
-    /// descriptor-aware ingestion.
-    pub async fn ingest_directory(&self, directory: &Path, namespace: Namespace) -> Result<()> {
-        let stored = self.get_all_hashes().await.unwrap_or_default();
-
-        let mut entries = match fs::read_dir(directory).await {
-            Ok(entries) => entries,
-            Err(_) => return Ok(()),
-        };
-
-        while let Some(entry) = entries.next_entry().await? {
-            let text = match fs::read_to_string(entry.path()).await {
-                Ok(text) => text,
-                Err(_) => continue,
-            };
-
-            let path = entry.path().to_string_lossy().replace('\\', "/");
-
-            let hash = Self::hash_content(&text);
-
-            if stored
-                .get(&path)
-                .is_some_and(|(_, stored_hash)| stored_hash == &hash)
-            {
-                continue;
-            }
-
-            self.ingest_file(&path, &text, namespace).await?;
-        }
+        // Each chunk carries a deterministic ID, so reingestion cannot
+        // accidentally duplicate an unchanged chunk index.
+        let _: Vec<serde_json::Value> = self.db.insert("knowledge_chunk").content(records).await?;
 
         Ok(())
-    }
-
-    pub fn vector_store_for(
-        &self,
-        namespace: Namespace,
-    ) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
-        SurrealVectorStore::new(
-            self.embedding_model.clone(),
-            self.db.clone(),
-            Some(namespace.table_name().to_string()),
-            SurrealDistanceFunction::Cosine,
-        )
-    }
-
-    pub fn vector_store(&self) -> SurrealVectorStore<Db, ollama::EmbeddingModel> {
-        self.vector_store_for(Namespace::Factual)
     }
 
     pub async fn search_namespace(
@@ -129,27 +187,7 @@ impl KnowledgeBase {
         namespace: Namespace,
         top_k: u64,
     ) -> Result<Vec<SearchResult>> {
-        let store = self.vector_store_for(namespace);
-
-        let request = VectorSearchRequest::builder()
-            .query(format!("query: {query}"))
-            .samples(top_k)
-            .build();
-
-        let results = store
-            .top_n(request)
-            .await
-            .map_err(|error| color_eyre::eyre::eyre!("{error}"))?;
-
-        Ok(results
-            .into_iter()
-            .map(|(score, id, document)| SearchResult {
-                score,
-                id,
-                content: content_from_document(&document),
-                namespace,
-            })
-            .collect())
+        self.search_multi(query, &[namespace], top_k).await
     }
 
     pub async fn search_multi(
@@ -158,77 +196,196 @@ impl KnowledgeBase {
         namespaces: &[Namespace],
         top_k: u64,
     ) -> Result<Vec<SearchResult>> {
-        let mut all_results = Vec::new();
+        let embedding_query = format!("query: {query}");
 
-        for &namespace in namespaces {
-            // A namespace table may not exist until it receives its
-            // first document, so an absent table is not fatal.
-            if let Ok(mut results) = self.search_namespace(query, namespace, top_k).await {
-                all_results.append(&mut results);
-            }
-        }
+        let query_embedding = self.embedding_model.embed_text(&embedding_query).await?.vec;
 
-        all_results.sort_by(|left, right| {
-            right
-                .score
-                .partial_cmp(&left.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let namespaces = namespaces
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
 
-        all_results.truncate(top_k as usize);
+        let mut response = self
+            .db
+            .query(
+                r#"
+                SELECT
+                    id,
+                    document,
+                    document_key,
+                    document_title,
+                    namespace,
+                    chunk_index,
+                    page_start,
+                    page_end,
+                    content,
+                    vector::similarity::cosine(
+                        $embedding,
+                        embedding
+                    ) AS score
+                FROM knowledge_chunk
+                WHERE namespace IN $namespaces
+                ORDER BY score DESC
+                LIMIT $limit;
+                "#,
+            )
+            .bind(("embedding", query_embedding))
+            .bind(("namespaces", namespaces))
+            .bind(("limit", top_k as usize))
+            .await?;
 
-        Ok(all_results)
+        let rows: Vec<ChunkSearchRow> = response.take(0)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| SearchResult {
+                score: row.score,
+                id: row.id.to_sql(),
+                document_id: row.document.to_sql(),
+                document_key: row.document_key,
+                document_title: row.document_title,
+                content: row.content,
+                namespace: Namespace::parse(&row.namespace),
+                chunk_index: row.chunk_index,
+                page_start: row.page_start,
+                page_end: row.page_end,
+            })
+            .collect())
     }
 
+    /// Compatibility helper for callers that only know a source path.
+    ///
+    /// New ingestion code should prefer replacing chunks by document.
     pub async fn delete_chunks_for_file(
         &self,
-        file_path: &str,
+        source_path: &str,
         namespace: Namespace,
     ) -> Result<()> {
-        let needle = format!("\"file_path\":\"{file_path}\"");
+        let mut response = self
+            .db
+            .query(
+                r#"
+                DELETE FROM knowledge_chunk
+                WHERE source_path = $source_path
+                  AND namespace = $namespace;
+                "#,
+            )
+            .bind(("source_path", source_path.to_string()))
+            .bind(("namespace", namespace.to_string()))
+            .await?;
 
-        let query = format!(
-            r#"
-            DELETE FROM {}
-            WHERE string::contains(
-                document,
-                $needle
-            );
-            "#,
-            namespace.table_name(),
-        );
-
-        self.db.query(&query).bind(("needle", needle)).await?;
+        let _: Vec<serde_json::Value> = response.take(0)?;
 
         Ok(())
     }
 }
 
-fn create_chunks(path: &str, text: &str) -> Vec<Chunk> {
-    chunk_input(text, 400, 80)
-        .into_iter()
-        .enumerate()
-        .map(|(chunk_index, content)| Chunk {
-            chunk_index,
-            file_path: path.to_string(),
-            content,
-        })
-        .collect()
-}
+fn create_chunk_drafts(document: &KnowledgeDocument, pages: &[ExtractedPage]) -> Vec<ChunkDraft> {
+    let document_id = RecordId::new("knowledge_document", document.document_key.clone());
 
-fn content_from_document(document: &serde_json::Value) -> String {
-    if let Some(items) = document.as_array() {
-        return items
-            .iter()
-            .filter_map(|item| item.get("content").and_then(|value| value.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n");
+    let identifiers = if document.descriptor.identifiers.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nIdentifiers: {}",
+            document.descriptor.identifiers.join("; "),
+        )
+    };
+
+    let mut chunk_index = 0;
+    let mut drafts = Vec::new();
+
+    for page in pages {
+        if page.text.trim().is_empty() {
+            continue;
+        }
+
+        let page_chunks = chunk_input(&page.text, CHUNK_MAX_CHARACTERS, CHUNK_OVERLAP_CHARACTERS);
+
+        for content in page_chunks {
+            let content = content.trim().to_string();
+
+            if content.is_empty() {
+                continue;
+            }
+
+            let embedding_text = format!(
+                "Document: {}{}\
+                 \nPage: {}\
+                 \n\n{}",
+                document.descriptor.title, identifiers, page.number, content,
+            );
+
+            let chunk_id = RecordId::new(
+                "knowledge_chunk",
+                format!("{}-{chunk_index}", document.document_key,),
+            );
+
+            drafts.push(ChunkDraft {
+                id: chunk_id,
+                document: document_id.clone(),
+                document_key: document.document_key.clone(),
+                source_path: document.source_path.clone(),
+                document_title: document.descriptor.title.clone(),
+                namespace: document.namespace.to_string(),
+                chunk_index,
+                page_start: page.number,
+                page_end: page.number,
+                content,
+                embedding_text,
+            });
+
+            chunk_index += 1;
+        }
     }
 
-    document
-        .get("content")
-        .and_then(|value| value.as_str())
-        .or_else(|| document.as_str())
-        .unwrap_or_default()
-        .to_string()
+    drafts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_chunk_drafts;
+    use crate::rig::document::{DocumentDescriptor, KnowledgeDocument};
+    use crate::rig::ingestion::ExtractedPage;
+    use crate::rig::knowledge_source::Namespace;
+
+    #[test]
+    fn chunks_are_linked_to_document_and_page() {
+        let document = KnowledgeDocument {
+            document_key: "document-key".into(),
+            source_path: "manual.pdf".into(),
+            raw_hash: "hash".into(),
+            media_type: "application/pdf".into(),
+            page_count: 2,
+            namespace: Namespace::Factual,
+            descriptor: DocumentDescriptor {
+                title: "Manual".into(),
+                identifiers: vec!["ABC123".into()],
+                ..Default::default()
+            },
+            descriptor_text: String::new(),
+            descriptor_model: "test".into(),
+            descriptor_version: "test".into(),
+            ingestion_version: "test".into(),
+        };
+
+        let pages = vec![
+            ExtractedPage {
+                number: 1,
+                text: "First page content".into(),
+            },
+            ExtractedPage {
+                number: 2,
+                text: "Second page content".into(),
+            },
+        ];
+
+        let chunks = create_chunk_drafts(&document, &pages);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].page_start, 1);
+        assert_eq!(chunks[1].page_start, 2);
+        assert_eq!(chunks[0].document_key, "document-key");
+        assert!(chunks[0].embedding_text.contains("ABC123"));
+    }
 }

@@ -136,7 +136,15 @@ impl ChatService {
             .map(|result| {
                 let preview = result.content.chars().take(120).collect::<String>();
 
-                (result.score, format!("[{}] {}", result.namespace, preview,))
+                (
+                    result.score,
+                    format!(
+                        "[{}] {} — {}",
+                        result.namespace,
+                        result.source_label(),
+                        preview,
+                    ),
+                )
             })
             .collect();
 
@@ -169,7 +177,7 @@ fn build_grounded_prompt(
 
     let passage_context = passages
         .iter()
-        .map(|result| result.content.as_str())
+        .map(|result| format!("[Source: {}]\n{}", result.source_label(), result.content,))
         .collect::<Vec<_>>()
         .join("\n\n--- PASSAGE ---\n\n");
 
@@ -191,6 +199,7 @@ Instructions:
 - For technical claims, rely on the retrieved passages.
 - Do not treat generated catalog metadata as proof of unsupported technical details.
 - If the available context is insufficient, say so.
+- When useful, cite the document title and physical page number supplied with a passage.
 
 User: {user_prompt}"#
     )

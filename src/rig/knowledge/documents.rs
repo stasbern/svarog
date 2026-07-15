@@ -3,7 +3,7 @@
 use color_eyre::Result;
 use rig::embeddings::EmbeddingModel;
 use serde::Deserialize;
-use surrealdb::types::SurrealValue;
+use surrealdb::types::{RecordId, SurrealValue};
 
 use super::KnowledgeBase;
 use crate::rig::document::{DocumentDescriptor, DocumentSearchResult, KnowledgeDocument};
@@ -57,9 +57,12 @@ impl KnowledgeDocumentRow {
 
 impl KnowledgeBase {
     /// Stores document metadata and its catalog embedding.
+    /// Stores document metadata at a deterministic SurrealDB record ID.
+    ///
+    /// A document whose application key is `abc` is stored as:
+    ///
+    /// `knowledge_document:abc`
     pub async fn upsert_document(&self, document: &KnowledgeDocument) -> Result<()> {
-        // Embed before deleting the previous record. If Ollama
-        // fails, the existing catalog record remains available.
         let embedding = self
             .embedding_model
             .embed_text(&document.descriptor_text)
@@ -68,29 +71,33 @@ impl KnowledgeBase {
 
         let descriptor_json = serde_json::to_string(&document.descriptor)?;
 
+        let document_id = RecordId::new("knowledge_document", document.document_key.clone());
+
         let mut response = self
             .db
             .query(
                 r#"
-                DELETE FROM knowledge_document
-                WHERE source_path = $source_path;
+            DELETE FROM knowledge_document
+            WHERE source_path = $source_path
+              AND id != $document;
 
-                CREATE knowledge_document SET
-                    document_key = $document_key,
-                    source_path = $source_path,
-                    raw_hash = $raw_hash,
-                    media_type = $media_type,
-                    page_count = $page_count,
-                    namespace = $namespace,
-                    descriptor_json = $descriptor_json,
-                    descriptor_text = $descriptor_text,
-                    descriptor_model = $descriptor_model,
-                    descriptor_version = $descriptor_version,
-                    ingestion_version = $ingestion_version,
-                    embedding_model = $embedding_model,
-                    embedding = $embedding;
-                "#,
+            UPSERT $document SET
+                document_key = $document_key,
+                source_path = $source_path,
+                raw_hash = $raw_hash,
+                media_type = $media_type,
+                page_count = $page_count,
+                namespace = $namespace,
+                descriptor_json = $descriptor_json,
+                descriptor_text = $descriptor_text,
+                descriptor_model = $descriptor_model,
+                descriptor_version = $descriptor_version,
+                ingestion_version = $ingestion_version,
+                embedding_model = $embedding_model,
+                embedding = $embedding;
+            "#,
             )
+            .bind(("document", document_id))
             .bind(("document_key", document.document_key.clone()))
             .bind(("source_path", document.source_path.clone()))
             .bind(("raw_hash", document.raw_hash.clone()))
@@ -106,8 +113,10 @@ impl KnowledgeBase {
             .bind(("embedding", embedding))
             .await?;
 
+        // Statement zero removes any old random-ID record for the source.
         let _: Vec<serde_json::Value> = response.take(0)?;
 
+        // Statement one performs the deterministic upsert.
         let _: Vec<serde_json::Value> = response.take(1)?;
 
         Ok(())
