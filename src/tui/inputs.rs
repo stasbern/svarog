@@ -4,8 +4,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
-use crate::tui::app::*;
 use crate::events::*;
+use crate::tui::app::*;
 
 impl App {
     pub async fn handle_events(&mut self, event_stream: &mut EventStream) -> Result<()> {

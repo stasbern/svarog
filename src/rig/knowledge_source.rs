@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Namespace {
@@ -11,10 +11,10 @@ pub enum Namespace {
 impl Namespace {
     pub fn table_name(&self) -> &'static str {
         match self {
-            Namespace::Factual  => "svarog_factual",
-            Namespace::Project  => "svarog_project",
+            Namespace::Factual => "svarog_factual",
+            Namespace::Project => "svarog_project",
             Namespace::Personal => "svarog_personal",
-            Namespace::Tmp      => "svarog_tmp",
+            Namespace::Tmp => "svarog_tmp",
         }
     }
 
@@ -23,21 +23,30 @@ impl Namespace {
         &[Namespace::Factual, Namespace::Project, Namespace::Personal]
     }
 
-    
     pub fn parse(text: &str) -> Namespace {
         let lower = text.to_lowercase();
-        if lower.contains("project")  { Namespace::Project }
-        else if lower.contains("personal") { Namespace::Personal }
-        else { Namespace::Factual } // default: factual
+        if lower.contains("project") {
+            Namespace::Project
+        } else if lower.contains("personal") {
+            Namespace::Personal
+        } else {
+            Namespace::Factual
+        } // default: factual
     }
 
     /// Parse LLM classifier output like "factual, project" into namespaces
     pub fn parse_list(text: &str) -> Vec<Namespace> {
         let mut result = Vec::new();
         let lower = text.to_lowercase();
-        if lower.contains("factual")  { result.push(Namespace::Factual); }
-        if lower.contains("project")  { result.push(Namespace::Project); }
-        if lower.contains("personal") { result.push(Namespace::Personal); }
+        if lower.contains("factual") {
+            result.push(Namespace::Factual);
+        }
+        if lower.contains("project") {
+            result.push(Namespace::Project);
+        }
+        if lower.contains("personal") {
+            result.push(Namespace::Personal);
+        }
         if result.is_empty() {
             // Fallback: search factual + project
             vec![Namespace::Factual, Namespace::Project]
@@ -46,7 +55,7 @@ impl Namespace {
         }
     }
 
-        /// System prompt for the ingestion classifier
+    /// System prompt for the ingestion classifier
     pub fn classifier_prompt() -> &'static str {
         "You classify documents into exactly one knowledge category. \
          Respond with ONLY one word from: factual, project, personal.\n\n\
@@ -60,14 +69,16 @@ impl Namespace {
 impl std::fmt::Display for Namespace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Namespace::Factual  => write!(f, "factual"),
-            Namespace::Project  => write!(f, "project"),
+            Namespace::Factual => write!(f, "factual"),
+            Namespace::Project => write!(f, "project"),
             Namespace::Personal => write!(f, "personal"),
-            Namespace::Tmp      => write!(f, "tmp"),
+            Namespace::Tmp => write!(f, "tmp"),
         }
     }
 }
 
 impl Default for Namespace {
-    fn default() -> Self { Namespace::Factual }
+    fn default() -> Self {
+        Namespace::Factual
+    }
 }

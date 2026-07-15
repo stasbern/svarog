@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use surrealdb::types::SurrealValue;
 
 use super::ingestion::ExtractedDocument;
 use super::knowledge_source::Namespace;
@@ -98,7 +97,10 @@ Rules:
         }
     }
 
-    pub fn from_model_output(response: &str, source_title: &str) -> Result<Self, serde_json::Error> {
+    pub fn from_model_output(
+        response: &str,
+        source_title: &str,
+    ) -> Result<Self, serde_json::Error> {
         // Be tolerant of models that still add Markdown fences or commentary.
         let json = match (response.find('{'), response.rfind('}')) {
             (Some(start), Some(end)) if end >= start => &response[start..=end],
@@ -133,7 +135,8 @@ Rules:
         normalize_strings(&mut self.identifiers);
         normalize_strings(&mut self.topics);
 
-        self.entities.retain(|entity| !entity.name.trim().is_empty());
+        self.entities
+            .retain(|entity| !entity.name.trim().is_empty());
 
         for entity in &mut self.entities {
             entity.name = entity.name.trim().to_string();
@@ -263,10 +266,7 @@ impl KnowledgeDocument {
     pub fn catalog_context(&self) -> String {
         format!(
             "{}\nNamespace: {}\nPages: {}\nSource: {}",
-            self.descriptor_text,
-            self.namespace,
-            self.page_count,
-            self.source_path
+            self.descriptor_text, self.namespace, self.page_count, self.source_path
         )
     }
 }
@@ -277,56 +277,10 @@ pub struct DocumentSearchResult {
     pub document: KnowledgeDocument,
 }
 
-#[derive(Debug, Deserialize, SurrealValue)]
-pub(crate) struct KnowledgeDocumentRow {
-    pub document_key: String,
-    pub source_path: String,
-    pub raw_hash: String,
-    pub media_type: String,
-    pub page_count: usize,
-    pub namespace: String,
-
-    pub descriptor_json: String,
-    pub descriptor_text: String,
-
-    pub descriptor_model: String,
-    pub descriptor_version: String,
-    pub ingestion_version: String,
-
-    pub score: f64,
-}
-
-impl KnowledgeDocumentRow {
-    pub fn into_search_result(self) -> Option<DocumentSearchResult> {
-        let descriptor: DocumentDescriptor =
-            serde_json::from_str(&self.descriptor_json).ok()?;
-
-        Some(DocumentSearchResult {
-            score: self.score,
-            document: KnowledgeDocument {
-                document_key: self.document_key,
-                source_path: self.source_path,
-                raw_hash: self.raw_hash,
-                media_type: self.media_type,
-                page_count: self.page_count,
-                namespace: Namespace::parse(&self.namespace),
-                descriptor,
-                descriptor_text: self.descriptor_text,
-                descriptor_model: self.descriptor_model,
-                descriptor_version: self.descriptor_version,
-                ingestion_version: self.ingestion_version,
-            },
-        })
-    }
-}
-
 fn document_key(source_path: &str) -> String {
     let digest = Sha256::digest(source_path.as_bytes());
 
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn normalize_strings(values: &mut Vec<String>) {
@@ -339,14 +293,13 @@ fn normalize_strings(values: &mut Vec<String>) {
             continue;
         }
 
-        if normalized
+        let already_present = normalized
             .iter()
-            .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
-        {
-            continue;
-        }
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&value));
 
-        normalized.push(value);
+        if !already_present {
+            normalized.push(value);
+        }
     }
 
     *values = normalized;

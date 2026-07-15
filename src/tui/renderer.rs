@@ -14,7 +14,9 @@ impl App {
         let input_lines = if inner_width > 0 {
             let (display, _, _) = Self::word_wrap_input(&self.input, inner_width, 0);
             display.chars().filter(|c| *c == '\n').count() + 1
-        } else { 1 };
+        } else {
+            1
+        };
 
         let layout = Layout::vertical([
             Constraint::Min(1),
@@ -147,7 +149,8 @@ impl App {
             ConsoleMode::Editing => Style::default().fg(self.theme.input_active),
         };
 
-        let (display, cursor_line, cursor_col) = Self::word_wrap_input(&self.input, inner_width, self.char_index);
+        let (display, cursor_line, cursor_col) =
+            Self::word_wrap_input(&self.input, inner_width, self.char_index);
 
         let input = Paragraph::new(display)
             .style(input_style)
@@ -198,7 +201,11 @@ impl App {
         let mut cursor_col = char_index.saturating_sub(*line_starts.last().unwrap_or(&0));
 
         for (i, &start) in line_starts.iter().enumerate() {
-            let end = if i + 1 < line_starts.len() { line_starts[i + 1] } else { chars.len() + 1 };
+            let end = if i + 1 < line_starts.len() {
+                line_starts[i + 1]
+            } else {
+                chars.len() + 1
+            };
             if char_index < end {
                 cursor_line = i;
                 cursor_col = char_index - start;

@@ -1,6 +1,9 @@
+pub mod chat_service;
+pub mod chunking;
 pub mod client;
+pub mod document;
+pub mod ingestion;
+pub mod ingestion_service;
 pub mod knowledge;
 pub mod knowledge_source;
-pub mod chunking;
-pub mod ingestion;
-pub mod document;
+pub mod request_handler;

@@ -23,7 +23,10 @@ async fn main() -> Result<()> {
     let client = OllamaClient::new(
         &env::var("OLLAMA_BASE_MODEL")?,
         &env::var("BASE_MODEL_PREAMBLE")?,
-        env::var("TEMPERATURE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7),
+        env::var("TEMPERATURE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.7),
         serde_json::json!({
             "top_p": env::var("TOP_P").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.95),
             "top_k": env::var("TOP_K").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(40),

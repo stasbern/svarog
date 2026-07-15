@@ -67,7 +67,11 @@ impl ExtractedDocument {
 
         let mut included_pages = 0;
 
-        for page in self.pages.iter().filter(|page| !page.text.trim().is_empty()) {
+        for page in self
+            .pages
+            .iter()
+            .filter(|page| !page.text.trim().is_empty())
+        {
             if included_pages >= max_pages || output.chars().count() >= max_chars {
                 break;
             }
@@ -166,9 +170,8 @@ pub async fn extract_path(path: &Path) -> Result<Option<ExtractedDocument>> {
         }
 
         _ => {
-            let text = String::from_utf8(bytes).wrap_err_with(|| {
-                format!("{} is not valid UTF-8", absolute_path.display())
-            })?;
+            let text = String::from_utf8(bytes)
+                .wrap_err_with(|| format!("{} is not valid UTF-8", absolute_path.display()))?;
 
             (
                 media_type_for_extension(&extension).to_string(),

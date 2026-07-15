@@ -4,70 +4,76 @@
 pub fn chunk_input(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
     const SEPARATORS: &[&str] = &["\n\n\n", "\n\n", "\n", ". ", ", ", " "];
 
-            fn split_recursive(text: &str, max_chars: usize, sep_idx: usize) -> Vec<String> {
-                if text.len() <= max_chars || sep_idx >= SEPARATORS.len() {
-                    if text.len() <= max_chars {
-                        return if text.trim().is_empty() {
-                            vec![]
-                        } else {
-                            vec![text.to_string()]
-                        };
+    fn split_recursive(text: &str, max_chars: usize, sep_idx: usize) -> Vec<String> {
+        if text.len() <= max_chars || sep_idx >= SEPARATORS.len() {
+            if text.len() <= max_chars {
+                return if text.trim().is_empty() {
+                    vec![]
+                } else {
+                    vec![text.to_string()]
+                };
+            }
+            let chars: Vec<char> = text.chars().collect();
+            let mut chunks = Vec::new();
+            let mut start = 0;
+            while start < chars.len() {
+                let end = (start + max_chars).min(chars.len());
+                if end == chars.len() {
+                    let s: String = chars[start..end].iter().collect();
+                    if !s.trim().is_empty() {
+                        chunks.push(s);
                     }
-                    let chars: Vec<char> = text.chars().collect();
-                    let mut chunks = Vec::new();
-                    let mut start = 0;
-                    while start < chars.len() {
-                        let end = (start + max_chars).min(chars.len());
-                        if end == chars.len() {
-                            let s: String = chars[start..end].iter().collect();
-                            if !s.trim().is_empty() { chunks.push(s); }
-                            break;
-                        }
-                        let break_at = chars[start..end].iter().rposition(|c| c.is_whitespace())
-                            .map(|pos| start + pos + 1)
-                            .unwrap_or(end);
-                        let s: String = chars[start..break_at].iter().collect();
-                        if !s.trim().is_empty() { chunks.push(s); }
-                        start = break_at;
-                    }
-                    return chunks;
+                    break;
                 }
-
-                let sep = SEPARATORS[sep_idx];
-                let parts: Vec<&str> = text.split(sep).collect();
-
-                if parts.len() == 1 {
-                    return split_recursive(text, max_chars, sep_idx + 1);
+                let break_at = chars[start..end]
+                    .iter()
+                    .rposition(|c| c.is_whitespace())
+                    .map(|pos| start + pos + 1)
+                    .unwrap_or(end);
+                let s: String = chars[start..break_at].iter().collect();
+                if !s.trim().is_empty() {
+                    chunks.push(s);
                 }
+                start = break_at;
+            }
+            return chunks;
+        }
 
-                let mut chunks = Vec::new();
-                let mut current = String::new();
+        let sep = SEPARATORS[sep_idx];
+        let parts: Vec<&str> = text.split(sep).collect();
 
-                for part in parts {
-                    let candidate = if current.is_empty() {
-                        part.to_string()
-                    } else {
-                        format!("{}{}{}", current, sep, part)
-                    };
-                    if candidate.len() <= max_chars {
-                        current = candidate;
-                    } else {
-                        if !current.trim().is_empty() {
-                            chunks.push(current);
-                        }
-                        if part.len() > max_chars {
-                            chunks.extend(split_recursive(part, max_chars, sep_idx + 1));
-                            current = String::new();
-                        } else {
-                            current = part.to_string();
-                        }
-                    }
-                }
+        if parts.len() == 1 {
+            return split_recursive(text, max_chars, sep_idx + 1);
+        }
+
+        let mut chunks = Vec::new();
+        let mut current = String::new();
+
+        for part in parts {
+            let candidate = if current.is_empty() {
+                part.to_string()
+            } else {
+                format!("{}{}{}", current, sep, part)
+            };
+            if candidate.len() <= max_chars {
+                current = candidate;
+            } else {
                 if !current.trim().is_empty() {
                     chunks.push(current);
                 }
-                chunks
+                if part.len() > max_chars {
+                    chunks.extend(split_recursive(part, max_chars, sep_idx + 1));
+                    current = String::new();
+                } else {
+                    current = part.to_string();
+                }
             }
+        }
+        if !current.trim().is_empty() {
+            chunks.push(current);
+        }
+        chunks
+    }
 
     let raw = split_recursive(text, max_chars, 0);
 
@@ -158,7 +164,14 @@ mod tests {
         // Each overlapped chunk (after the first) should contain some text
         // from the tail of the previous raw chunk
         for i in 1..raw.len().min(overlapped.len()) {
-            let prev_tail: String = raw[i - 1].chars().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect();
+            let prev_tail: String = raw[i - 1]
+                .chars()
+                .rev()
+                .take(80)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             // Find a word from the tail that should appear at the start of the overlapped chunk
             if let Some(word) = prev_tail.split_whitespace().last() {
                 assert!(

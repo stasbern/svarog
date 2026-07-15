@@ -7,9 +7,9 @@ use crate::events::*;
 #[derive(Debug, Default)]
 pub enum ConsoleMode {
     #[default]
-    Normal,   // chat view, navigation keys
-    Editing,  // chat view, typing in input
-    Logs,     // logs view, navigation keys
+    Normal, // chat view, navigation keys
+    Editing, // chat view, typing in input
+    Logs,    // logs view, navigation keys
 }
 
 pub struct ChatEntry {
@@ -25,7 +25,7 @@ impl ChatEntry {
 
 pub struct App {
     pub theme: crate::tui::theme::Theme,
-    
+
     pub console_mode: ConsoleMode,
 
     pub input: String,
@@ -36,7 +36,7 @@ pub struct App {
     pub status_line: String,
 
     pub log_scroll_offset: u16,
-    pub logs: Vec<ChatEntry>,    
+    pub logs: Vec<ChatEntry>,
     pub follow_logs: bool,
 
     pub last_viewport: (u16, u16),
@@ -47,10 +47,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
-        tx: mpsc::Sender<Request>,
-        rx: mpsc::Receiver<Response>,
-    ) -> Self {
+    pub fn new(tx: mpsc::Sender<Request>, rx: mpsc::Receiver<Response>) -> Self {
         Self {
             theme: crate::tui::theme::Theme::default(),
             input: String::new(),
@@ -119,10 +116,14 @@ impl App {
 
         match self.console_mode {
             ConsoleMode::Normal | ConsoleMode::Editing => {
-                if at_bottom { self.follow_output = true; }
+                if at_bottom {
+                    self.follow_output = true;
+                }
             }
             ConsoleMode::Logs => {
-                if at_bottom { self.follow_logs = true; }
+                if at_bottom {
+                    self.follow_logs = true;
+                }
             }
         }
     }
@@ -135,11 +136,17 @@ impl App {
     }
 
     pub fn wrapped_line_count(text: &str, width: usize) -> u16 {
-        if width == 0 { return 1; }
+        if width == 0 {
+            return 1;
+        }
         text.split('\n')
             .map(|line| {
                 let len = line.chars().count();
-                if len == 0 { 1 } else { ((len + width - 1) / width) as u16 }
+                if len == 0 {
+                    1
+                } else {
+                    ((len + width - 1) / width) as u16
+                }
             })
             .sum::<u16>()
             .max(1)
@@ -225,7 +232,8 @@ impl App {
                         }
                     }
                     Response::Status(status) => {
-                        self.logs.push(ChatEntry::new("status".into(), status.clone()));
+                        self.logs
+                            .push(ChatEntry::new("status".into(), status.clone()));
                         if status.contains("complete") || status.contains("failed") {
                             self.ingesting = false;
                         }
