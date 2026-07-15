@@ -77,8 +77,18 @@ pub(super) async fn initialize(db: &Surreal<Db>) -> Result<()> {
         DEFINE INDEX IF NOT EXISTS
             idx_knowledge_chunk_namespace
             ON TABLE knowledge_chunk
-            FIELDS namespace;
-        "#,
+            FIELDS namespace
+            
+            DEFINE ANALYZER IF NOT EXISTS svarog_technical
+            TOKENIZERS blank, class, camel, punct
+            FILTERS lowercase, ascii;
+
+        DEFINE INDEX IF NOT EXISTS idx_knowledge_chunk_fulltext
+            ON TABLE knowledge_chunk
+            FIELDS embedding_text
+            FULLTEXT ANALYZER svarog_technical
+            BM25(1.2, 0.75);
+                "#,
     )
     .await?
     .check()?;

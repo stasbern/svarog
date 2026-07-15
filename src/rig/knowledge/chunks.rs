@@ -65,6 +65,24 @@ struct ChunkSearchRow {
     score: f64,
 }
 
+impl ChunkSearchRow {
+    fn into_search_result(self) -> SearchResult {
+        SearchResult {
+            score: self.score,
+            id: self.id.to_sql(),
+            document_id: self.document.to_sql(),
+            document_key: self.document_key,
+            document_title: self.document_title,
+            content: self.content,
+            namespace: Namespace::parse(&self.namespace),
+            chunk_index: self.chunk_index,
+            page_start: self.page_start,
+            page_end: self.page_end,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SearchResult {
     pub score: f64,
     pub id: String,
@@ -187,14 +205,15 @@ impl KnowledgeBase {
         namespace: Namespace,
         top_k: u64,
     ) -> Result<Vec<SearchResult>> {
-        self.search_multi(query, &[namespace], top_k).await
+        self.search_vector(query, &[namespace], top_k as usize)
+            .await
     }
 
-    pub async fn search_multi(
+    pub async fn search_vector(
         &self,
         query: &str,
         namespaces: &[Namespace],
-        top_k: u64,
+        top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         let embedding_query = format!("query: {query}");
 
@@ -209,47 +228,82 @@ impl KnowledgeBase {
             .db
             .query(
                 r#"
-                SELECT
-                    id,
-                    document,
-                    document_key,
-                    document_title,
-                    namespace,
-                    chunk_index,
-                    page_start,
-                    page_end,
-                    content,
-                    vector::similarity::cosine(
-                        $embedding,
-                        embedding
-                    ) AS score
-                FROM knowledge_chunk
-                WHERE namespace IN $namespaces
-                ORDER BY score DESC
-                LIMIT $limit;
-                "#,
+            SELECT
+                id,
+                document,
+                document_key,
+                document_title,
+                namespace,
+                chunk_index,
+                page_start,
+                page_end,
+                content,
+                vector::similarity::cosine(
+                    $embedding,
+                    embedding
+                ) AS score
+            FROM knowledge_chunk
+            WHERE namespace IN $namespaces
+            ORDER BY score DESC
+            LIMIT $limit;
+            "#,
             )
             .bind(("embedding", query_embedding))
             .bind(("namespaces", namespaces))
-            .bind(("limit", top_k as usize))
+            .bind(("limit", top_k))
             .await?;
 
         let rows: Vec<ChunkSearchRow> = response.take(0)?;
 
         Ok(rows
             .into_iter()
-            .map(|row| SearchResult {
-                score: row.score,
-                id: row.id.to_sql(),
-                document_id: row.document.to_sql(),
-                document_key: row.document_key,
-                document_title: row.document_title,
-                content: row.content,
-                namespace: Namespace::parse(&row.namespace),
-                chunk_index: row.chunk_index,
-                page_start: row.page_start,
-                page_end: row.page_end,
-            })
+            .map(ChunkSearchRow::into_search_result)
+            .collect())
+    }
+
+    pub async fn search_full_text(
+        &self,
+        query: &str,
+        namespaces: &[Namespace],
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let namespaces = namespaces
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        let mut response = self
+            .db
+            .query(
+                r#"
+            SELECT
+                id,
+                document,
+                document_key,
+                document_title,
+                namespace,
+                chunk_index,
+                page_start,
+                page_end,
+                content,
+                search::score(1) AS score
+            FROM knowledge_chunk
+            WHERE embedding_text @1@ $query
+              AND namespace IN $namespaces
+            ORDER BY score DESC
+            LIMIT $limit;
+            "#,
+            )
+            .bind(("query", query.to_string()))
+            .bind(("namespaces", namespaces))
+            .bind(("limit", top_k))
+            .await?;
+
+        let rows: Vec<ChunkSearchRow> = response.take(0)?;
+
+        Ok(rows
+            .into_iter()
+            .map(ChunkSearchRow::into_search_result)
             .collect())
     }
 

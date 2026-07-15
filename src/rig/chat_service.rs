@@ -8,19 +8,20 @@ use tokio::sync::mpsc;
 
 use super::knowledge::KnowledgeBase;
 use super::knowledge_source::Namespace;
+use super::retrieval::RetrievalService;
 use crate::events::Response;
 
 const DOCUMENT_MATCH_LIMIT: usize = 3;
 const DOCUMENT_SCORE_THRESHOLD: f64 = 0.20;
 
-const PASSAGE_MATCH_LIMIT: u64 = 6;
-const PASSAGE_SCORE_THRESHOLD: f64 = 0.10;
+const PASSAGE_MATCH_LIMIT: usize = 6;
 
 pub struct ChatService {
     agent: rig::agent::Agent<CompletionModel>,
     knowledge: Arc<KnowledgeBase>,
     response_tx: mpsc::Sender<Response>,
     chat_history: Vec<Message>,
+    retrieval: RetrievalService,
 }
 
 impl ChatService {
@@ -29,9 +30,12 @@ impl ChatService {
         knowledge: Arc<KnowledgeBase>,
         response_tx: mpsc::Sender<Response>,
     ) -> Self {
+        let retrieval = RetrievalService::new(knowledge.clone());
+
         Self {
             agent,
             knowledge,
+            retrieval,
             response_tx,
             chat_history: Vec::new(),
         }
@@ -85,17 +89,15 @@ impl ChatService {
 
     async fn find_passages(&self, prompt: &str) -> Vec<super::knowledge::SearchResult> {
         match self
-            .knowledge
-            .search_multi(prompt, Namespace::searchable(), PASSAGE_MATCH_LIMIT)
+            .retrieval
+            .retrieve(prompt, Namespace::searchable(), PASSAGE_MATCH_LIMIT)
             .await
         {
-            Ok(results) => results
-                .into_iter()
-                .filter(|result| result.score >= PASSAGE_SCORE_THRESHOLD)
-                .collect(),
+            Ok(results) => results,
 
             Err(error) => {
-                self.report_kb_error("Passage search failed", error).await;
+                self.report_kb_error("Hybrid passage search failed", error)
+                    .await;
 
                 Vec::new()
             }

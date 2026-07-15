@@ -7,3 +7,4 @@ pub mod ingestion_service;
 pub mod knowledge;
 pub mod knowledge_source;
 pub mod request_handler;
+pub mod retrieval;
