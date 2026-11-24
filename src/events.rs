@@ -11,6 +11,7 @@ pub enum Request {
 pub enum Response {
     CompleteResponse(String),
     Reasoning(String),
+    ChatFailed(String),
     ContextFound(Vec<(f64, String)>),
     Status(String),
     Error(String),

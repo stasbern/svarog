@@ -80,7 +80,7 @@ impl App {
 
         let msg_heights: Vec<u16> = entries
             .iter()
-            .map(|m| App::wrapped_line_count(&m.message, msg_inner_width) + 2)
+            .map(|m| App::wrapped_line_count(&m.display_text(), msg_inner_width) + 2)
             .collect();
         let total_h: u16 = msg_heights.iter().sum();
 
@@ -119,7 +119,10 @@ impl App {
                     BorderType::Rounded,
                     " svarog ".into(),
                 ),
-                "thinking" => (theme.reasoning, BorderType::Plain, " thinking ".into()),
+                "thinking" if msg.collapsed => {
+                    (theme.reasoning, BorderType::Plain, " thinking ▸ ".into())
+                }
+                "thinking" => (theme.reasoning, BorderType::Plain, " thinking ▾ ".into()),
                 s if s.starts_with("kb:") => (theme.kb_border, BorderType::Plain, format!(" {s} ")),
                 "error" => (theme.status_busy, BorderType::Double, " error ".into()),
                 "status" => (theme.status_ok, BorderType::Plain, " status ".into()),
@@ -137,7 +140,7 @@ impl App {
                 Style::default()
             };
 
-            let paragraph = Paragraph::new(msg.message.as_str())
+            let paragraph = Paragraph::new(msg.display_text())
                 .style(text_style)
                 .wrap(Wrap { trim: true })
                 .block(block)
@@ -251,22 +254,52 @@ impl App {
         };
 
         let guide: Vec<Span> = match self.console_mode {
-            ConsoleMode::Normal => vec![
-                " Edit ".into(),
-                accent("<E>"),
-                " Ingest ".into(),
-                accent("<I>"),
-                logs_label,
-                accent("<L>"),
-                " Scroll ".into(),
-                accent("<↑/↓>"),
-                " Quit ".into(),
-                accent("<Q>"),
-            ],
-            ConsoleMode::Editing if self.unread_logs => {
-                vec![logs_label, " Normal ".into(), accent("<Esc>")]
+            ConsoleMode::Normal => {
+                let mut guide = Vec::new();
+
+                if self.can_retry {
+                    guide.extend([
+                        Span::styled(" Retry ", Style::default().bold()),
+                        accent("<R>"),
+                    ]);
+                }
+
+                guide.extend([
+                    " Edit ".into(),
+                    accent("<E>"),
+                    " Ingest ".into(),
+                    accent("<I>"),
+                    logs_label,
+                    accent("<L>"),
+                    " Thinking ".into(),
+                    accent("<T>"),
+                    " All ".into(),
+                    accent("<⇧T>"),
+                    " Scroll ".into(),
+                    accent("<↑/↓>"),
+                    " Quit ".into(),
+                    accent("<Q>"),
+                ]);
+
+                guide
             }
-            ConsoleMode::Editing => vec![" Normal ".into(), accent("<Esc>")],
+            ConsoleMode::Editing => {
+                let mut guide = Vec::new();
+
+                if self.can_retry {
+                    guide.extend([
+                        Span::styled(" Retry ", Style::default().bold()),
+                        accent("<Esc>,<R>"),
+                    ]);
+                }
+
+                if self.unread_logs {
+                    guide.push(logs_label);
+                }
+
+                guide.extend([" Normal ".into(), accent("<Esc>")]);
+                guide
+            }
             ConsoleMode::Logs => vec![
                 " Back ".into(),
                 accent("<Esc>"),

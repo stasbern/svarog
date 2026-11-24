@@ -1,8 +1,13 @@
+use std::borrow::Cow;
+use std::time::{Duration, Instant};
+
 use color_eyre::{Result, eyre::WrapErr};
 use ratatui::{DefaultTerminal, crossterm::event::EventStream};
 use tokio::sync::mpsc;
 
 use crate::events::*;
+
+const STATUS_DISPLAY_TIME: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 pub enum ConsoleMode {
@@ -15,11 +20,37 @@ pub enum ConsoleMode {
 pub struct ChatEntry {
     pub sender: String,
     pub message: String,
+    pub collapsed: bool,
 }
 
 impl ChatEntry {
     pub fn new(sender: String, message: String) -> Self {
-        Self { sender, message }
+        Self {
+            sender,
+            message,
+            collapsed: false,
+        }
+    }
+
+    pub fn reasoning(message: String, collapsed: bool) -> Self {
+        Self {
+            sender: "thinking".into(),
+            message,
+            collapsed,
+        }
+    }
+
+    pub fn is_reasoning(&self) -> bool {
+        self.sender == "thinking"
+    }
+
+    /// The rendered text: a one-line summary while collapsed.
+    pub fn display_text(&self) -> Cow<'_, str> {
+        if self.collapsed {
+            Cow::Owned(format!("{} lines hidden", self.message.lines().count()))
+        } else {
+            Cow::Borrowed(&self.message)
+        }
     }
 }
 
@@ -34,6 +65,10 @@ pub struct App {
     pub char_index: usize,
     pub follow_output: bool,
     pub status_line: String,
+    status_expires_at: Option<Instant>,
+    pub reasoning_expanded: bool,
+    pub last_prompt: Option<String>,
+    pub can_retry: bool,
 
     pub log_scroll_offset: u16,
     pub logs: Vec<ChatEntry>,
@@ -63,6 +98,10 @@ impl App {
             follow_output: true,
             follow_logs: true,
             status_line: String::new(),
+            status_expires_at: None,
+            reasoning_expanded: false,
+            last_prompt: None,
+            can_retry: false,
             last_viewport: (0, 0),
             exit: false,
             tx,
@@ -198,16 +237,40 @@ impl App {
         self.messages
             .push(ChatEntry::new("user".to_string(), self.input.clone()));
         self.tx.send(Request::Prompt(self.input.clone())).await?;
-        self.input.clear();
+        self.last_prompt = Some(std::mem::take(&mut self.input));
+        self.can_retry = false;
         self.reset_cursor();
         Ok(())
+    }
+
+    /// Resends the last prompt; the backend records history only on success.
+    pub async fn retry_prompt(&mut self) -> Result<()> {
+        if let Some(prompt) = self.last_prompt.clone() {
+            self.can_retry = false;
+            self.tx.send(Request::Prompt(prompt)).await?;
+        }
+        Ok(())
+    }
+
+    pub fn toggle_latest_reasoning(&mut self) {
+        if let Some(entry) = self.messages.iter_mut().rev().find(|e| e.is_reasoning()) {
+            entry.collapsed = !entry.collapsed;
+        }
+    }
+
+    pub fn toggle_all_reasoning(&mut self) {
+        self.reasoning_expanded = !self.reasoning_expanded;
+
+        for entry in self.messages.iter_mut().filter(|e| e.is_reasoning()) {
+            entry.collapsed = !self.reasoning_expanded;
+        }
     }
 
     pub fn total_content_height(messages: &[ChatEntry], viewport_width: u16) -> u16 {
         let msg_inner_width = viewport_width.saturating_sub(2) as usize;
         messages
             .iter()
-            .map(|m| App::wrapped_line_count(&m.message, msg_inner_width) + 2)
+            .map(|m| App::wrapped_line_count(&m.display_text(), msg_inner_width) + 2)
             .sum()
     }
 
@@ -236,11 +299,16 @@ impl App {
             while let Ok(resp) = self.rx.try_recv() {
                 match resp {
                     Response::CompleteResponse(msg) => {
+                        self.can_retry = false;
                         self.messages.push(ChatEntry::new("svarog".into(), msg));
                     }
                     Response::Reasoning(reasoning) => {
                         self.messages
-                            .push(ChatEntry::new("thinking".into(), reasoning));
+                            .push(ChatEntry::reasoning(reasoning, !self.reasoning_expanded));
+                    }
+                    Response::ChatFailed(e) => {
+                        self.can_retry = true;
+                        self.push_log("error".into(), e);
                     }
                     Response::ContextFound(contexts) => {
                         for (score, preview) in contexts {
@@ -253,11 +321,22 @@ impl App {
                             self.ingesting = false;
                         }
                         self.status_line = status;
+                        self.status_expires_at = Some(Instant::now() + STATUS_DISPLAY_TIME);
                     }
                     Response::Error(e) => {
                         self.push_log("error".into(), e);
                     }
                 }
+            }
+
+            // Progress stays visible while ingesting; afterwards the last status fades out.
+            if !self.ingesting
+                && self
+                    .status_expires_at
+                    .is_some_and(|expires_at| Instant::now() >= expires_at)
+            {
+                self.status_line.clear();
+                self.status_expires_at = None;
             }
         }
         Ok(())

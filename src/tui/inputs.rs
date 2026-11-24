@@ -47,6 +47,9 @@ impl App {
         match key.code {
             KeyCode::Char('e') => self.console_mode = ConsoleMode::Editing,
             KeyCode::Char('l') => self.open_logs(),
+            KeyCode::Char('t') => self.toggle_latest_reasoning(),
+            KeyCode::Char('T') => self.toggle_all_reasoning(),
+            KeyCode::Char('r') if self.can_retry && !self.ingesting => self.retry_prompt().await?,
             KeyCode::Char('i') if !self.ingesting => {
                 self.ingesting = true;
                 self.status_line = "Ingesting documents...".into();

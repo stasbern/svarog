@@ -93,7 +93,7 @@ impl ChatService {
             Err(error) => {
                 let _ = self
                     .response_tx
-                    .send(Response::Error(format!(
+                    .send(Response::ChatFailed(format!(
                         "Chat request failed: {}",
                         readable_error(&error)
                     )))
