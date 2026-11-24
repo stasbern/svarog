@@ -6,7 +6,7 @@ use rig::{
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue, ToSql};
 
-use super::KnowledgeBase;
+use super::{EmbeddingPrompts, KnowledgeBase};
 use crate::rig::chunking::chunk_input;
 use crate::rig::document::KnowledgeDocument;
 use crate::rig::ingestion::ExtractedPage;
@@ -117,7 +117,7 @@ impl KnowledgeBase {
         pages: &[ExtractedPage],
         pipeline_hash: &str,
     ) -> Result<usize> {
-        let drafts = create_chunk_drafts(document, pages);
+        let drafts = create_chunk_drafts(document, pages, &self.embedding_prompts);
 
         if drafts.is_empty() {
             return Err(color_eyre::eyre::eyre!(
@@ -215,7 +215,7 @@ impl KnowledgeBase {
         namespaces: &[Namespace],
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let embedding_query = format!("query: {query}");
+        let embedding_query = self.embedding_prompts.query(query);
 
         let query_embedding = self.embedding_model.embed_text(&embedding_query).await?.vec;
 
@@ -334,14 +334,18 @@ impl KnowledgeBase {
     }
 }
 
-fn create_chunk_drafts(document: &KnowledgeDocument, pages: &[ExtractedPage]) -> Vec<ChunkDraft> {
+fn create_chunk_drafts(
+    document: &KnowledgeDocument,
+    pages: &[ExtractedPage],
+    prompts: &EmbeddingPrompts,
+) -> Vec<ChunkDraft> {
     let document_id = RecordId::new("knowledge_document", document.document_key.clone());
 
     let identifiers = if document.descriptor.identifiers.is_empty() {
         String::new()
     } else {
         format!(
-            "\nIdentifiers: {}",
+            "Identifiers: {}\n",
             document.descriptor.identifiers.join("; "),
         )
     };
@@ -363,11 +367,9 @@ fn create_chunk_drafts(document: &KnowledgeDocument, pages: &[ExtractedPage]) ->
                 continue;
             }
 
-            let embedding_text = format!(
-                "Document: {}{}\
-                 \nPage: {}\
-                 \n\n{}",
-                document.descriptor.title, identifiers, page.number, content,
+            let embedding_text = prompts.document(
+                &document.descriptor.title,
+                &format!("{identifiers}Page: {}\n\n{content}", page.number),
             );
 
             let chunk_id = RecordId::new(
@@ -401,6 +403,7 @@ mod tests {
     use super::create_chunk_drafts;
     use crate::rig::document::{DocumentDescriptor, KnowledgeDocument};
     use crate::rig::ingestion::ExtractedPage;
+    use crate::rig::knowledge::EmbeddingPrompts;
     use crate::rig::knowledge_source::Namespace;
 
     #[test]
@@ -434,12 +437,18 @@ mod tests {
             },
         ];
 
-        let chunks = create_chunk_drafts(&document, &pages);
+        let prompts = EmbeddingPrompts {
+            query_template: "task: search result | query: {text}".into(),
+            document_template: "title: {title} | text: {text}".into(),
+        };
+
+        let chunks = create_chunk_drafts(&document, &pages, &prompts);
 
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].page_start, 1);
         assert_eq!(chunks[1].page_start, 2);
         assert_eq!(chunks[0].document_key, "document-key");
         assert!(chunks[0].embedding_text.contains("ABC123"));
+        assert!(chunks[0].embedding_text.starts_with("title: Manual | text: "));
     }
 }

@@ -65,7 +65,10 @@ impl KnowledgeBase {
     pub async fn upsert_document(&self, document: &KnowledgeDocument) -> Result<()> {
         let embedding = self
             .embedding_model
-            .embed_text(&document.descriptor_text)
+            .embed_text(&self.embedding_prompts.document(
+                &document.descriptor.title,
+                &document.descriptor_text,
+            ))
             .await?
             .vec;
 
@@ -128,7 +131,7 @@ impl KnowledgeBase {
         query: &str,
         top_k: usize,
     ) -> Result<Vec<DocumentSearchResult>> {
-        let embedding_query = format!("query: {query}");
+        let embedding_query = self.embedding_prompts.query(query);
 
         let query_embedding = self.embedding_model.embed_text(&embedding_query).await?.vec;
 

@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
-use rig::completion::{Chat, Message};
-use rig::providers::ollama::CompletionModel;
+use rig::completion::{AssistantContent, Chat, Message};
+use rig::providers::openai::CompletionModel;
 use tokio::sync::mpsc;
 
+use super::client::split_reasoning;
 use super::knowledge::KnowledgeBase;
 use super::knowledge_source::Namespace;
 use super::retrieval::RetrievalService;
@@ -52,6 +53,27 @@ impl ChatService {
 
         match self.agent.chat(&final_prompt, &mut self.chat_history).await {
             Ok(answer) => {
+                let (mut reasoning, answer) = split_reasoning(&answer);
+
+                // Collect llama-server's separate reasoning and keep all reasoning out of resent history.
+                if let Some(last) = self.chat_history.last_mut()
+                    && let Message::Assistant { content, .. } = last
+                {
+                    reasoning.extend(content.iter().filter_map(|item| match item {
+                        AssistantContent::Reasoning(part) => Some(part.display_text()),
+                        _ => None,
+                    }));
+
+                    *last = Message::assistant(answer.clone());
+                }
+
+                if !reasoning.trim().is_empty() {
+                    let _ = self
+                        .response_tx
+                        .send(Response::Reasoning(reasoning.trim().to_string()))
+                        .await;
+                }
+
                 let _ = self
                     .response_tx
                     .send(Response::CompleteResponse(answer))

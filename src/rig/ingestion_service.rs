@@ -5,9 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rig::completion::Prompt;
-use rig::providers::ollama::CompletionModel;
+use rig::providers::openai::CompletionModel;
 use tokio::sync::mpsc;
 
+use super::client::split_reasoning;
 use super::document::{DocumentDescriptor, KnowledgeDocument};
 use super::ingestion::{ExtractedDocument, INGESTION_VERSION, extract_path};
 use super::knowledge::KnowledgeBase;
@@ -177,7 +178,7 @@ impl IngestionService {
         let preview = extracted.preview(1_500);
 
         match self.classifier.prompt(&preview).await {
-            Ok(response) => Namespace::parse(&response),
+            Ok(response) => Namespace::parse(&split_reasoning(&response).1),
             Err(_) => Namespace::Factual,
         }
     }
@@ -190,7 +191,7 @@ impl IngestionService {
         let input = extracted.descriptor_source(6, 16_000);
 
         let response = match self.descriptor_agent.prompt(&input).await {
-            Ok(response) => response,
+            Ok(response) => split_reasoning(&response).1,
 
             Err(error) => {
                 self.status(format!(

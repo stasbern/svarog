@@ -223,6 +223,10 @@ impl App {
                     Response::CompleteResponse(msg) => {
                         self.messages.push(ChatEntry::new("svarog".into(), msg));
                     }
+                    Response::Reasoning(reasoning) => {
+                        self.messages
+                            .push(ChatEntry::new("thinking".into(), reasoning));
+                    }
                     Response::ContextFound(contexts) => {
                         for (score, preview) in &contexts {
                             self.logs.push(ChatEntry::new(

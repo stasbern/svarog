@@ -1,6 +1,6 @@
 // src/rig/ingestion.rs
 
-pub const INGESTION_VERSION: &str = "native-document-chunks-v1";
+pub const INGESTION_VERSION: &str = "native-document-chunks-v2";
 
 use color_eyre::{
     Result,

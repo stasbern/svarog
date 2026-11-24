@@ -19,24 +19,57 @@ async fn main() -> Result<()> {
     // initialize tokio mpsc channels
     let channels = events::Channels::new()?;
 
-    // initialize ollama client and agent
-    let client = OllamaClient::new(
-        &env::var("OLLAMA_BASE_MODEL")?,
+    let llm_base_url = env::var("LLM_BASE_URL")?;
+    // Local servers such as llama-server accept requests without a key.
+    let llm_api_key = env::var("LLM_API_KEY").unwrap_or_default();
+
+    // Only send configured params; providers differ on non-standard fields.
+    let mut sampling_params = serde_json::Map::new();
+    for (env_key, param) in [
+        ("TOP_P", "top_p"),
+        ("TOP_K", "top_k"),
+        ("REPEAT_PENALTY", "repeat_penalty"),
+    ] {
+        if let Some(value) = env::var(env_key)
+            .ok()
+            .and_then(|v| v.trim().parse::<serde_json::Number>().ok())
+        {
+            sampling_params.insert(param.to_string(), value.into());
+        }
+    }
+
+    let client = LlmClient::new(
+        &llm_base_url,
+        &llm_api_key,
+        &env::var("BASE_MODEL")?,
         &env::var("BASE_MODEL_PREAMBLE")?,
         env::var("TEMPERATURE")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.7),
-        serde_json::json!({
-            "top_p": env::var("TOP_P").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.95),
-            "top_k": env::var("TOP_K").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(40),
-            "repeat_penalty": env::var("REPEAT_PENALTY").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0),
-            "num_ctx": env::var("NUM_CTX").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(8192),
-        }),
-    );
+        serde_json::Value::Object(sampling_params),
+    )?;
 
-    let knowledge =
-        Arc::new(KnowledgeBase::new(client.inner(), &env::var("OLLAMA_EMBEDDING_MODEL")?).await?);
+    // Embeddings may live on a separate server, e.g. llama-server --embedding.
+    let default_prompts = EmbeddingPrompts::default();
+    let knowledge = Arc::new(
+        KnowledgeBase::new(
+            &env::var("EMBEDDING_BASE_URL").unwrap_or(llm_base_url),
+            &env::var("EMBEDDING_API_KEY").unwrap_or(llm_api_key),
+            &env::var("EMBEDDING_MODEL")?,
+            env::var("EMBEDDING_BATCH_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_EMBEDDING_BATCH_SIZE),
+            EmbeddingPrompts {
+                query_template: env::var("EMBEDDING_QUERY_TEMPLATE")
+                    .unwrap_or(default_prompts.query_template),
+                document_template: env::var("EMBEDDING_DOCUMENT_TEMPLATE")
+                    .unwrap_or(default_prompts.document_template),
+            },
+        )
+        .await?,
+    );
 
     client.handle_requests(knowledge.clone(), channels.prompt_rx, channels.response_tx);
 

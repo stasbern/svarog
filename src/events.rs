@@ -10,6 +10,7 @@ pub enum Request {
 #[derive(Debug, Clone)]
 pub enum Response {
     CompleteResponse(String),
+    Reasoning(String),
     ContextFound(Vec<(f64, String)>),
     Status(String),
     Error(String),

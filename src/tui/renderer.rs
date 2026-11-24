@@ -119,6 +119,7 @@ impl App {
                     BorderType::Rounded,
                     " svarog ".into(),
                 ),
+                "thinking" => (theme.reasoning, BorderType::Plain, " thinking ".into()),
                 s if s.starts_with("kb:") => (theme.kb_border, BorderType::Plain, format!(" {s} ")),
                 "error" => (theme.status_busy, BorderType::Double, " error ".into()),
                 "status" => (theme.status_ok, BorderType::Plain, " status ".into()),
@@ -130,7 +131,14 @@ impl App {
                 .border_type(border_type)
                 .border_style(Style::default().fg(border_color));
 
+            let text_style = if msg.sender == "thinking" {
+                Style::default().fg(theme.reasoning).italic()
+            } else {
+                Style::default()
+            };
+
             let paragraph = Paragraph::new(msg.message.as_str())
+                .style(text_style)
                 .wrap(Wrap { trim: true })
                 .block(block)
                 .scroll((hidden_top, 0));
