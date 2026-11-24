@@ -5,12 +5,10 @@ mod hashes;
 mod schema;
 
 use color_eyre::Result;
-use rig::providers::openai;
 use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, RocksDb};
 
-use embedding::CompatEmbeddingModel;
-pub use embedding::DEFAULT_BATCH_SIZE as DEFAULT_EMBEDDING_BATCH_SIZE;
+pub use embedding::{DEFAULT_BATCH_SIZE as DEFAULT_EMBEDDING_BATCH_SIZE, Embedder};
 
 pub use chunks::SearchResult;
 
@@ -51,7 +49,7 @@ impl EmbeddingPrompts {
 /// - `documents`: document catalog
 /// - `chunks`: passage embeddings and retrieval
 pub struct KnowledgeBase {
-    pub(super) embedding_model: CompatEmbeddingModel,
+    pub(super) embedder: Embedder,
     pub(super) embedding_model_name: String,
     pub(super) embedding_prompts: EmbeddingPrompts,
     pub(super) db: Surreal<Db>,
@@ -59,17 +57,10 @@ pub struct KnowledgeBase {
 
 impl KnowledgeBase {
     pub async fn new(
-        base_url: &str,
-        api_key: &str,
+        embedder: Embedder,
         embedding_model_name: &str,
-        embedding_batch_size: usize,
         embedding_prompts: EmbeddingPrompts,
     ) -> Result<Self> {
-        let client = openai::Client::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .build()?;
-
         let db = Surreal::new::<RocksDb>("svarog_vectors.db").await?;
 
         db.use_ns("svarog_ns").use_db("svarog_db").await?;
@@ -77,11 +68,7 @@ impl KnowledgeBase {
         schema::initialize(&db).await?;
 
         Ok(Self {
-            embedding_model: CompatEmbeddingModel::new(
-                client,
-                embedding_model_name,
-                embedding_batch_size,
-            ),
+            embedder,
             embedding_model_name: embedding_model_name.to_string(),
             embedding_prompts,
             db,

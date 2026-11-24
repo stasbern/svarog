@@ -22,6 +22,8 @@ async fn main() -> Result<()> {
     let llm_base_url = env::var("LLM_BASE_URL")?;
     // Local servers such as llama-server accept requests without a key.
     let llm_api_key = env::var("LLM_API_KEY").unwrap_or_default();
+    // A Rig dialect name: `openai` covers Gemini; local servers use e.g. `llamacpp`.
+    let llm_dialect = env::var("LLM_DIALECT").unwrap_or_else(|_| "openai".into());
 
     // Only send configured params; providers differ on non-standard fields.
     let mut sampling_params = serde_json::Map::new();
@@ -39,8 +41,7 @@ async fn main() -> Result<()> {
     }
 
     let client = LlmClient::new(
-        &llm_base_url,
-        &llm_api_key,
+        connect(&llm_dialect, &llm_base_url, &llm_api_key)?,
         &env::var("BASE_MODEL")?,
         &env::var("BASE_MODEL_PREAMBLE")?,
         env::var("TEMPERATURE")
@@ -48,19 +49,28 @@ async fn main() -> Result<()> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.7),
         serde_json::Value::Object(sampling_params),
-    )?;
+    );
 
     // Embeddings may live on a separate server, e.g. llama-server --embedding.
+    let embedding_model = env::var("EMBEDDING_MODEL")?;
+    let embedder = Embedder::new(
+        &connect(
+            &env::var("EMBEDDING_DIALECT").unwrap_or(llm_dialect),
+            &env::var("EMBEDDING_BASE_URL").unwrap_or(llm_base_url),
+            &env::var("EMBEDDING_API_KEY").unwrap_or(llm_api_key),
+        )?,
+        &embedding_model,
+        env::var("EMBEDDING_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_EMBEDDING_BATCH_SIZE),
+    );
+
     let default_prompts = EmbeddingPrompts::default();
     let knowledge = Arc::new(
         KnowledgeBase::new(
-            &env::var("EMBEDDING_BASE_URL").unwrap_or(llm_base_url),
-            &env::var("EMBEDDING_API_KEY").unwrap_or(llm_api_key),
-            &env::var("EMBEDDING_MODEL")?,
-            env::var("EMBEDDING_BATCH_SIZE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(DEFAULT_EMBEDDING_BATCH_SIZE),
+            embedder,
+            &embedding_model,
             EmbeddingPrompts {
                 query_template: env::var("EMBEDDING_QUERY_TEMPLATE")
                     .unwrap_or(default_prompts.query_template),

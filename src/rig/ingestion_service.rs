@@ -4,11 +4,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use rig::completion::Prompt;
-use rig::providers::openai::CompletionModel;
+use rig::agent::Agent;
 use tokio::sync::mpsc;
 
-use super::client::split_reasoning;
+use super::client::{readable_error, split_reasoning};
 use super::document::{DocumentDescriptor, KnowledgeDocument};
 use super::ingestion::{ExtractedDocument, INGESTION_VERSION, extract_path};
 use super::knowledge::KnowledgeBase;
@@ -18,8 +17,8 @@ use crate::events::Response;
 type StoredHashes = HashMap<String, (String, String)>;
 
 pub struct IngestionService {
-    classifier: rig::agent::Agent<CompletionModel>,
-    descriptor_agent: rig::agent::Agent<CompletionModel>,
+    classifier: Agent,
+    descriptor_agent: Agent,
     descriptor_model_name: String,
 
     knowledge: Arc<KnowledgeBase>,
@@ -28,8 +27,8 @@ pub struct IngestionService {
 
 impl IngestionService {
     pub fn new(
-        classifier: rig::agent::Agent<CompletionModel>,
-        descriptor_agent: rig::agent::Agent<CompletionModel>,
+        classifier: Agent,
+        descriptor_agent: Agent,
         descriptor_model_name: String,
         knowledge: Arc<KnowledgeBase>,
         response_tx: mpsc::Sender<Response>,
@@ -178,7 +177,7 @@ impl IngestionService {
         let preview = extracted.preview(1_500);
 
         match self.classifier.prompt(&preview).await {
-            Ok(response) => Namespace::parse(&split_reasoning(&response).1),
+            Ok(response) => Namespace::parse(&split_reasoning(&response.output()).1),
             Err(_) => Namespace::Factual,
         }
     }
@@ -191,12 +190,13 @@ impl IngestionService {
         let input = extracted.descriptor_source(6, 16_000);
 
         let response = match self.descriptor_agent.prompt(&input).await {
-            Ok(response) => split_reasoning(&response).1,
+            Ok(response) => split_reasoning(&response.output()).1,
 
             Err(error) => {
                 self.status(format!(
                     "{file_name}: descriptor extraction failed \
-                     ({error}); using fallback metadata"
+                     ({}); using fallback metadata",
+                    readable_error(&error)
                 ))
                 .await;
 

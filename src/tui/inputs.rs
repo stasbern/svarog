@@ -46,7 +46,7 @@ impl App {
     pub async fn handle_normal_mode(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Char('e') => self.console_mode = ConsoleMode::Editing,
-            KeyCode::Char('l') => self.console_mode = ConsoleMode::Logs,
+            KeyCode::Char('l') => self.open_logs(),
             KeyCode::Char('i') if !self.ingesting => {
                 self.ingesting = true;
                 self.status_line = "Ingesting documents...".into();

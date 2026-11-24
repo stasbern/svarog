@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use color_eyre::Result;
-use rig::client::CompletionClient;
-use rig::providers::openai::{CompletionModel, CompletionsClient};
+use color_eyre::{Result, eyre::eyre};
+use rig::agent::{Agent, AgentBuilder};
+use rig::providers::openai::{OpenAI, OpenAIConfig, wire};
 use tokio::sync::mpsc;
 
 use super::chat_service::ChatService;
@@ -13,10 +13,21 @@ use super::knowledge_source::Namespace;
 use super::request_handler::spawn_request_handler;
 use crate::events::{Request, Response};
 
-/// Chat Completions client for any OpenAI-compatible endpoint
-/// (Gemini, llama.cpp `llama-server`, Ollama `/v1`, ...).
+/// Connects to an OpenAI-shaped server using a Rig dialect name (`openai`, `llamacpp`, ...).
+pub fn connect(dialect: &str, base_url: &str, api_key: &str) -> Result<OpenAI> {
+    let mut dialect = *wire::by_name(dialect).ok_or_else(|| eyre!("unknown dialect `{dialect}`"))?;
+
+    // Gemini omits embedding `usage`, and nothing here reads it.
+    dialect.quirks.embedding.requires_usage = false;
+
+    Ok(OpenAIConfig::with_key(&dialect, api_key)
+        .with_base_url(base_url)
+        .client())
+}
+
+/// Builds the chat, classification and metadata agents on one Chat Completions model.
 pub struct LlmClient {
-    client: CompletionsClient,
+    provider: OpenAI,
     model: String,
     preamble: String,
     temperature: f64,
@@ -25,25 +36,19 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(
-        base_url: &str,
-        api_key: &str,
+        provider: OpenAI,
         model: &str,
         preamble: &str,
         temperature: f64,
         additional_params: serde_json::Value,
-    ) -> Result<Self> {
-        let client = CompletionsClient::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .build()?;
-
-        Ok(Self {
-            client,
+    ) -> Self {
+        Self {
+            provider,
             model: model.to_string(),
             preamble: preamble.to_string(),
             temperature,
             additional_params,
-        })
+        }
     }
 
     pub fn handle_requests(
@@ -69,9 +74,8 @@ impl LlmClient {
         spawn_request_handler(request_rx, chat_service, ingestion_service);
     }
 
-    fn agent_with(&self, preamble: &str, temperature: f64) -> rig::agent::Agent<CompletionModel> {
-        self.client
-            .agent(&self.model)
+    fn agent_with(&self, preamble: &str, temperature: f64) -> Agent {
+        AgentBuilder::new(self.provider.chat(&self.model))
             .preamble(preamble)
             .temperature(temperature)
             .additional_params(self.additional_params.clone())
@@ -100,9 +104,42 @@ pub fn split_reasoning(text: &str) -> (String, String) {
     (reasoning.join("\n\n"), answer.trim().to_string())
 }
 
+/// Shortens provider errors to the `error.message` of an embedded JSON body, if any.
+pub fn readable_error(error: &impl std::fmt::Display) -> String {
+    let text = error.to_string();
+
+    let provider_message = text
+        .find(['[', '{'])
+        .and_then(|start| {
+            serde_json::Deserializer::from_str(&text[start..])
+                .into_iter::<serde_json::Value>()
+                .next()?
+                .ok()
+        })
+        .and_then(|json| {
+            let error = json.get(0).unwrap_or(&json).get("error")?;
+            let message = error.get("message")?.as_str()?;
+
+            Some(match error.get("code") {
+                Some(code) => format!("{code}: {message}"),
+                None => message.to_string(),
+            })
+        });
+
+    provider_message.unwrap_or(text)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split_reasoning;
+    use super::{readable_error, split_reasoning};
+
+    #[test]
+    fn extracts_provider_error_message() {
+        let raw = r#"HttpError: status 503: [{"error": {"code": 503, "message": "High demand."}}]"#;
+
+        assert_eq!(readable_error(&raw), "503: High demand.");
+        assert_eq!(readable_error(&"connection refused"), "connection refused");
+    }
 
     #[test]
     fn splits_inline_reasoning_blocks() {

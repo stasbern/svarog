@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use rig::completion::{AssistantContent, Chat, Message};
-use rig::providers::openai::CompletionModel;
+use rig::agent::Agent;
+use rig::completion::{AssistantContent, Message};
 use tokio::sync::mpsc;
 
-use super::client::split_reasoning;
+use super::client::{readable_error, split_reasoning};
 use super::knowledge::KnowledgeBase;
 use super::knowledge_source::Namespace;
 use super::retrieval::RetrievalService;
@@ -18,7 +18,7 @@ const DOCUMENT_SCORE_THRESHOLD: f64 = 0.20;
 const PASSAGE_MATCH_LIMIT: usize = 6;
 
 pub struct ChatService {
-    agent: rig::agent::Agent<CompletionModel>,
+    agent: Agent,
     knowledge: Arc<KnowledgeBase>,
     response_tx: mpsc::Sender<Response>,
     chat_history: Vec<Message>,
@@ -27,7 +27,7 @@ pub struct ChatService {
 
 impl ChatService {
     pub fn new(
-        agent: rig::agent::Agent<CompletionModel>,
+        agent: Agent,
         knowledge: Arc<KnowledgeBase>,
         response_tx: mpsc::Sender<Response>,
     ) -> Self {
@@ -51,26 +51,36 @@ impl ChatService {
 
         let final_prompt = build_grounded_prompt(&prompt, &document_matches, &passages);
 
-        match self.agent.chat(&final_prompt, &mut self.chat_history).await {
-            Ok(answer) => {
-                let (mut reasoning, answer) = split_reasoning(&answer);
+        let request = self
+            .agent
+            .prompt(final_prompt.as_str())
+            .history(&self.chat_history);
 
-                // Collect llama-server's separate reasoning and keep all reasoning out of resent history.
-                if let Some(last) = self.chat_history.last_mut()
-                    && let Message::Assistant { content, .. } = last
-                {
-                    reasoning.extend(content.iter().filter_map(|item| match item {
-                        AssistantContent::Reasoning(part) => Some(part.display_text()),
+        match request.await {
+            Ok(response) => {
+                let (inline_reasoning, answer) = split_reasoning(&response.output());
+
+                // llama-server returns reasoning as separate content blocks, not inline tags.
+                let reasoning = response
+                    .content()
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::Reasoning(part) => Some(part.text.as_str()),
                         _ => None,
-                    }));
+                    })
+                    .chain(Some(inline_reasoning.as_str()))
+                    .filter(|part| !part.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
 
-                    *last = Message::assistant(answer.clone());
-                }
+                // Reasoning stays out of the history resent on every turn.
+                self.chat_history.push(Message::user(final_prompt));
+                self.chat_history.push(Message::assistant(answer.clone()));
 
-                if !reasoning.trim().is_empty() {
+                if !reasoning.is_empty() {
                     let _ = self
                         .response_tx
-                        .send(Response::Reasoning(reasoning.trim().to_string()))
+                        .send(Response::Reasoning(reasoning))
                         .await;
                 }
 
@@ -83,7 +93,10 @@ impl ChatService {
             Err(error) => {
                 let _ = self
                     .response_tx
-                    .send(Response::Error(format!("{error:?}")))
+                    .send(Response::Error(format!(
+                        "Chat request failed: {}",
+                        readable_error(&error)
+                    )))
                     .await;
             }
         }
@@ -179,12 +192,9 @@ impl ChatService {
     }
 
     async fn report_kb_error(&self, operation: &str, error: color_eyre::eyre::Report) {
-        let message = format!("{operation}: {error}");
+        let message = format!("{operation}: {}", readable_error(&error));
 
-        let _ = self
-            .response_tx
-            .send(Response::ContextFound(vec![(0.0, message)]))
-            .await;
+        let _ = self.response_tx.send(Response::Error(message)).await;
     }
 }
 

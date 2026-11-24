@@ -1,7 +1,6 @@
 // src/rig/knowledge/documents.rs
 
 use color_eyre::Result;
-use rig::embeddings::EmbeddingModel;
 use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
 
@@ -64,13 +63,12 @@ impl KnowledgeBase {
     /// `knowledge_document:abc`
     pub async fn upsert_document(&self, document: &KnowledgeDocument) -> Result<()> {
         let embedding = self
-            .embedding_model
-            .embed_text(&self.embedding_prompts.document(
+            .embedder
+            .embed_one(&self.embedding_prompts.document(
                 &document.descriptor.title,
                 &document.descriptor_text,
             ))
-            .await?
-            .vec;
+            .await?;
 
         let descriptor_json = serde_json::to_string(&document.descriptor)?;
 
@@ -133,7 +131,7 @@ impl KnowledgeBase {
     ) -> Result<Vec<DocumentSearchResult>> {
         let embedding_query = self.embedding_prompts.query(query);
 
-        let query_embedding = self.embedding_model.embed_text(&embedding_query).await?.vec;
+        let query_embedding = self.embedder.embed_one(&embedding_query).await?;
 
         let mut response = self
             .db

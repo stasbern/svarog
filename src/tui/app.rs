@@ -38,6 +38,7 @@ pub struct App {
     pub log_scroll_offset: u16,
     pub logs: Vec<ChatEntry>,
     pub follow_logs: bool,
+    pub unread_logs: bool,
 
     pub last_viewport: (u16, u16),
     pub ingesting: bool,
@@ -57,6 +58,7 @@ impl App {
             chat_scroll_offset: 0,
             log_scroll_offset: 0,
             logs: Vec::new(),
+            unread_logs: false,
             ingesting: false,
             follow_output: true,
             follow_logs: true,
@@ -209,6 +211,19 @@ impl App {
             .sum()
     }
 
+    fn push_log(&mut self, sender: String, message: String) {
+        self.logs.push(ChatEntry::new(sender, message));
+
+        if !matches!(self.console_mode, ConsoleMode::Logs) {
+            self.unread_logs = true;
+        }
+    }
+
+    pub fn open_logs(&mut self) {
+        self.console_mode = ConsoleMode::Logs;
+        self.unread_logs = false;
+    }
+
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.exit {
             terminal.draw(|frame| {
@@ -228,24 +243,19 @@ impl App {
                             .push(ChatEntry::new("thinking".into(), reasoning));
                     }
                     Response::ContextFound(contexts) => {
-                        for (score, preview) in &contexts {
-                            self.logs.push(ChatEntry::new(
-                                format!("kb: score {:.2}", score),
-                                preview.clone(),
-                            ));
+                        for (score, preview) in contexts {
+                            self.push_log(format!("kb: score {:.2}", score), preview);
                         }
                     }
                     Response::Status(status) => {
-                        self.logs
-                            .push(ChatEntry::new("status".into(), status.clone()));
+                        self.push_log("status".into(), status.clone());
                         if status.contains("complete") || status.contains("failed") {
                             self.ingesting = false;
                         }
                         self.status_line = status;
                     }
                     Response::Error(e) => {
-                        self.logs.push(ChatEntry::new("error".into(), e.clone()));
-                        self.status_line = format!("Error: {e}");
+                        self.push_log("error".into(), e);
                     }
                 }
             }

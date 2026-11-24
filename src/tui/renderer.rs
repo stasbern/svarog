@@ -226,56 +226,65 @@ impl App {
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
         use ratatui::text::Span;
-        let mut spans: Vec<Span> = vec![];
+        let mut status: Vec<Span> = vec![];
 
         if self.ingesting {
-            spans.push(" ⟳ ".into());
-            spans.push(Span::styled(
+            status.push(" ⟳ ".into());
+            status.push(Span::styled(
                 &self.status_line,
                 Style::default().fg(self.theme.status_busy),
             ));
-            spans.push("  ".into());
         } else if !self.status_line.is_empty() {
-            spans.push(Span::styled(
+            status.push(Span::styled(
                 &self.status_line,
                 Style::default().fg(self.theme.status_ok),
             ));
-            spans.push("  ".into());
         }
 
         let accent =
             |s: &'static str| Span::styled(s, Style::default().fg(self.theme.accent).bold());
 
-        match self.console_mode {
-            ConsoleMode::Normal => {
-                spans.extend([
-                    " Edit ".into(),
-                    accent("<E>"),
-                    " Ingest ".into(),
-                    accent("<I>"),
-                    " Logs ".into(),
-                    accent("<L>"),
-                    " Scroll ".into(),
-                    accent("<↑/↓>"),
-                    " Quit ".into(),
-                    accent("<Q>"),
-                ]);
-            }
-            ConsoleMode::Editing => {
-                spans.extend([" Normal ".into(), accent("<Esc>")]);
-            }
-            ConsoleMode::Logs => {
-                spans.extend([
-                    " Back ".into(),
-                    accent("<Esc>"),
-                    " Scroll ".into(),
-                    accent("<↑/↓>"),
-                    " Quit ".into(),
-                    accent("<Q>"),
-                ]);
-            }
-        }
+        let logs_label = if self.unread_logs {
+            Span::styled(" Logs● ", Style::default().bold())
+        } else {
+            " Logs ".into()
+        };
 
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        let guide: Vec<Span> = match self.console_mode {
+            ConsoleMode::Normal => vec![
+                " Edit ".into(),
+                accent("<E>"),
+                " Ingest ".into(),
+                accent("<I>"),
+                logs_label,
+                accent("<L>"),
+                " Scroll ".into(),
+                accent("<↑/↓>"),
+                " Quit ".into(),
+                accent("<Q>"),
+            ],
+            ConsoleMode::Editing if self.unread_logs => {
+                vec![logs_label, " Normal ".into(), accent("<Esc>")]
+            }
+            ConsoleMode::Editing => vec![" Normal ".into(), accent("<Esc>")],
+            ConsoleMode::Logs => vec![
+                " Back ".into(),
+                accent("<Esc>"),
+                " Scroll ".into(),
+                accent("<↑/↓>"),
+                " Quit ".into(),
+                accent("<Q>"),
+            ],
+        };
+
+        // The guide keeps its full width; long status text is cut off instead.
+        let guide = Line::from(guide);
+        let [status_area, guide_area] = area.layout(&Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(guide.width() as u16 + 1),
+        ]));
+
+        frame.render_widget(Paragraph::new(Line::from(status)), status_area);
+        frame.render_widget(Paragraph::new(guide.right_aligned()), guide_area);
     }
 }

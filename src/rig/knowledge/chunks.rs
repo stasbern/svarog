@@ -1,8 +1,4 @@
 use color_eyre::Result;
-use rig::{
-    Embed,
-    embeddings::{EmbeddingModel, EmbeddingsBuilder},
-};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue, ToSql};
 
@@ -15,8 +11,8 @@ use crate::rig::knowledge_source::Namespace;
 const CHUNK_MAX_CHARACTERS: usize = 1_800;
 const CHUNK_OVERLAP_CHARACTERS: usize = 250;
 
-/// Intermediate document given to Rig for embedding.
-#[derive(Debug, Serialize, Embed)]
+/// A chunk before its embedding is computed.
+#[derive(Debug)]
 struct ChunkDraft {
     id: RecordId,
     document: RecordId,
@@ -28,8 +24,6 @@ struct ChunkDraft {
     page_start: usize,
     page_end: usize,
     content: String,
-
-    #[embed]
     embedding_text: String,
 }
 
@@ -138,38 +132,31 @@ impl KnowledgeBase {
     }
 
     async fn embed_chunk_drafts(&self, drafts: Vec<ChunkDraft>) -> Result<Vec<StoredChunk>> {
-        let mut builder = EmbeddingsBuilder::new(self.embedding_model.clone());
+        let texts: Vec<String> = drafts
+            .iter()
+            .map(|draft| draft.embedding_text.clone())
+            .collect();
 
-        for draft in drafts {
-            builder = builder.document(draft)?;
-        }
+        let vectors = self.embedder.embed(&texts).await?;
 
-        let embedded_documents = builder.build().await?;
-
-        let mut records = Vec::new();
-
-        for (draft, embeddings) in embedded_documents {
-            // `ChunkDraft` has exactly one #[embed] field, so this
-            // normally produces exactly one embedding.
-            for embedding in embeddings {
-                records.push(StoredChunk {
-                    id: draft.id.clone(),
-                    document: draft.document.clone(),
-                    document_key: draft.document_key.clone(),
-                    source_path: draft.source_path.clone(),
-                    document_title: draft.document_title.clone(),
-                    namespace: draft.namespace.clone(),
-                    chunk_index: draft.chunk_index,
-                    page_start: draft.page_start,
-                    page_end: draft.page_end,
-                    content: draft.content.clone(),
-                    embedding_text: embedding.document,
-                    embedding: embedding.vec,
-                });
-            }
-        }
-
-        Ok(records)
+        Ok(drafts
+            .into_iter()
+            .zip(vectors)
+            .map(|(draft, embedding)| StoredChunk {
+                id: draft.id,
+                document: draft.document,
+                document_key: draft.document_key,
+                source_path: draft.source_path,
+                document_title: draft.document_title,
+                namespace: draft.namespace,
+                chunk_index: draft.chunk_index,
+                page_start: draft.page_start,
+                page_end: draft.page_end,
+                content: draft.content,
+                embedding_text: draft.embedding_text,
+                embedding,
+            })
+            .collect())
     }
 
     async fn replace_stored_chunks(
@@ -217,7 +204,7 @@ impl KnowledgeBase {
     ) -> Result<Vec<SearchResult>> {
         let embedding_query = self.embedding_prompts.query(query);
 
-        let query_embedding = self.embedding_model.embed_text(&embedding_query).await?.vec;
+        let query_embedding = self.embedder.embed_one(&embedding_query).await?;
 
         let namespaces = namespaces
             .iter()
